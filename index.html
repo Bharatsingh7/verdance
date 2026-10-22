@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>Verdance</title>
+  <meta name="description" content="A calm exploration game: drive a little rover through a world that nature has quietly taken back." />
+  <meta name="theme-color" content="#1d2a24" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><path d='M32 6C18 22 14 34 20 46c4 8 20 8 24 0 6-12 2-24-12-40z' fill='%236f9a42'/><path d='M32 20v38' stroke='%23e9e4d8' stroke-width='3'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500&family=Karla:wght@400;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div id="app"></div>
+
+  <section id="title">
+    <div class="title-inner">
+      <p class="eyebrow">a quiet drive through the world after us</p>
+      <h1>Verdance</h1>
+      <p class="lede">The cities are asleep. The roads are moss. Somewhere out there are hidden valleys, old echoes, and a whale that likes to say hello.</p>
+      <button id="begin" disabled>Preparing the world…</button>
+      <div id="loadbar"><i></i></div>
+      <ul class="controls desktop-only">
+        <li><kbd>W A S D</kbd> drive</li><li><kbd>Shift</kbd> boost</li><li><kbd>Drag</kbd> look around</li>
+        <li><kbd>Q</kbd> scan</li><li><kbd>H</kbd> hover mode</li><li><kbd>C</kbd> drone camera</li>
+        <li><kbd>Tab</kbd> map</li><li><kbd>J</kbd> journal</li><li><kbd>M</kbd> radio</li>
+        <li><kbd>T</kbd> hold to pass time</li><li><kbd>L</kbd> lights</li><li><kbd>P</kbd> photo mode</li>
+      </ul>
+      <p class="touch-only small">Left thumb drives. Drag anywhere to look. Buttons on the right do the rest.</p>
+      <p class="small fine">Best with sound on. Progress saves automatically.</p>
+    </div>
+  </section>
+
+  <section id="hud" hidden>
+    <div id="compass"><div id="compass-strip"></div><i class="needle"></i></div>
+    <div id="counter"><span id="c-echo">0/30</span><span class="dot">·</span><span id="c-place">0/23</span></div>
+    <div id="banner"><small></small><strong></strong></div>
+    <div id="toasts"></div>
+    <div id="status">
+      <span id="clock">06:00</span>
+      <span id="speed">0 km/h</span>
+      <span id="mode"></span>
+      <span id="radio"></span>
+    </div>
+    <div id="hint" class="desktop-only">Q scan · H hover · C drone · Tab map · J journal · M radio · T time</div>
+  </section>
+
+  <section id="map" class="overlay" hidden>
+    <div class="panel map-panel">
+      <header><h2>The World</h2><button class="close" data-close="map">Close</button></header>
+      <div class="map-wrap"><canvas id="map-canvas" width="768" height="768"></canvas></div>
+      <p class="small legend"><span class="lg you"></span> you <span class="lg place"></span> discovered <span class="lg echo"></span> echo found <span class="lg ping"></span> scanned echo</p>
+    </div>
+  </section>
+
+  <section id="journal" class="overlay" hidden>
+    <div class="panel journal-panel">
+      <header><h2>Journal</h2><button class="close" data-close="journal">Close</button></header>
+      <div id="journal-body"></div>
+    </div>
+  </section>
+
+  <section id="touch" hidden>
+    <div id="stick"><i></i></div>
+    <div id="tbuttons">
+      <button data-key="KeyQ" data-tap>Scan</button>
+      <button data-key="KeyH" data-tap>Hover</button>
+      <button data-key="ShiftLeft">Boost</button>
+      <button data-key="KeyC" data-tap>Drone</button>
+      <button data-key="Tab" data-tap>Map</button>
+      <button data-key="KeyJ" data-tap>Journal</button>
+      <button data-key="KeyM" data-tap>Radio</button>
+      <button data-key="KeyT">Time</button>
+      <button data-key="Space" data-tap class="drive-only">Honk</button>
+      <button data-key="KeyE" class="drone-only">Up</button>
+      <button data-key="KeyQ" class="drone-only">Down</button>
+    </div>
+  </section>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
