@@ -12,3 +12,8 @@ All textures are from [ambientCG](https://ambientcg.com) and licensed **CC0 1.0*
 - `concrete`: [Concrete042A](https://ambientcg.com/view?id=Concrete042A)
 - `asphalt`: [Asphalt031](https://ambientcg.com/view?id=Asphalt031)
 - `rust`: [Metal041B](https://ambientcg.com/view?id=Metal041B)
+- `wood`: [WoodSiding008](https://ambientcg.com/view?id=WoodSiding008)
+- `planks`: [Planks037A](https://ambientcg.com/view?id=Planks037A)
+- `roof`: [RoofingTiles013A](https://ambientcg.com/view?id=RoofingTiles013A)
+- `thatch`: [ThatchedRoof001A](https://ambientcg.com/view?id=ThatchedRoof001A)
+- `panel`: [MetalPlates006](https://ambientcg.com/view?id=MetalPlates006)

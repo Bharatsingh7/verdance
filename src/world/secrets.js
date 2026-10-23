@@ -53,29 +53,23 @@ export class Secrets {
     this.scene = scene;
     this.collected = new Set(save?.echoes || []);
     this.discovered = new Set(save?.discovered || []);
+    // Wild finds keep their own text (the sites that made them may be far away and unloaded).
+    this.wild = { places: save?.wild?.places || {}, echoes: save?.wild?.echoes || {} };
+    this.hinted = new Set(save?.hinted || []);
     this.items = [];
+    this.itemIds = new Set();
     this.scanTime = -1;
     this.scanCooldown = 0;
 
-    const shardGeo = new THREE.OctahedronGeometry(0.7, 0);
-    const ringGeo = new THREE.TorusGeometry(1.3, 0.05, 4, 24);
-    const beamGeo = new THREE.CylinderGeometry(0.6, 0.6, 140, 8, 1, true); beamGeo.translate(0, 70, 0);
+    this.shardGeo = new THREE.OctahedronGeometry(0.7, 0);
+    this.ringGeo = new THREE.TorusGeometry(1.3, 0.05, 4, 24);
+    this.beamGeo = new THREE.CylinderGeometry(0.6, 0.6, 140, 8, 1, true); this.beamGeo.translate(0, 70, 0);
     this.shardMat = new THREE.MeshBasicMaterial({ color: 0xffe6a8 });
     this.ringMat = new THREE.MeshBasicMaterial({ color: 0xfff4d6, transparent: true, opacity: 0.6 });
-    const beamMat = new THREE.MeshBasicMaterial({ color: 0xffe6a8, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false });
+    this.beamMat = new THREE.MeshBasicMaterial({ color: 0xffe6a8, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false });
     for (const e of ECHOES) {
       const a = at(e.near);
-      const x = a.x + e.dx, z = a.z + e.dz;
-      const y = Math.max(heightAt(x, z), WATER_LEVEL) + 1.8;
-      const g = new THREE.Group();
-      g.position.set(x, y, z);
-      const shard = new THREE.Mesh(shardGeo, this.shardMat); shard.scale.set(1, 1.6, 1);
-      const ring = new THREE.Mesh(ringGeo, this.ringMat); ring.rotation.x = Math.PI / 2;
-      const beam = new THREE.Mesh(beamGeo, beamMat.clone()); beam.visible = false;
-      g.add(shard, ring, beam);
-      g.visible = !this.collected.has(e.id);
-      scene.add(g);
-      this.items.push({ ...e, x, y, z, g, shard, ring, beam, scanned: 0 });
+      this.addEcho({ ...e, x: a.x + e.dx, z: a.z + e.dz });
     }
 
     this.places = [
@@ -83,6 +77,9 @@ export class Secrets {
       ...VALLEY_DATA.map((v) => ({ id: v.id, name: v.name, text: v.text, x: v.x, z: v.z, r: v.r * 0.7, kind: 'valley' })),
       ...VIEWPOINTS.map((v) => ({ ...v, kind: 'viewpoint' })),
     ];
+    this.islandPlaces = this.places.length;
+    // Wild places found before (kept on the map and in the journal).
+    for (const [id, p] of Object.entries(this.wild.places)) this.places.push({ ...p, id, wild: true });
 
     // Scanner shockwave.
     this.wave = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), new THREE.MeshBasicMaterial({ color: 0x6ff5dc, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, wireframe: true }));
@@ -90,8 +87,41 @@ export class Secrets {
     scene.add(this.wave);
   }
 
+  // An echo item: { id, x, z, title, text, under? (sits on the sea floor), site? (owner, for unloading) }.
+  addEcho(e) {
+    if (this.itemIds.has(e.id)) return;
+    const ground = heightAt(e.x, e.z);
+    const y = (e.under ? ground : Math.max(ground, WATER_LEVEL)) + (e.lift ?? 1.8);
+    const g = new THREE.Group();
+    g.position.set(e.x, y, e.z);
+    const shard = new THREE.Mesh(this.shardGeo, this.shardMat); shard.scale.set(1, 1.6, 1);
+    const ring = new THREE.Mesh(this.ringGeo, this.ringMat); ring.rotation.x = Math.PI / 2;
+    const beam = new THREE.Mesh(this.beamGeo, this.beamMat.clone()); beam.visible = false;
+    g.add(shard, ring, beam);
+    g.visible = !this.collected.has(e.id);
+    this.scene.add(g);
+    this.items.push({ ...e, y, g, shard, ring, beam, scanned: 0 });
+    this.itemIds.add(e.id);
+  }
+
+  removeSite(siteId) {
+    this.items = this.items.filter((it) => {
+      if (it.site !== siteId) return true;
+      this.scene.remove(it.g); it.beam.material.dispose(); this.itemIds.delete(it.id);
+      return false;
+    });
+    this.places = this.places.filter((p) => p.site !== siteId || this.discovered.has(p.id));
+  }
+
+  addPlace(p) { if (!this.places.some((q) => q.id === p.id)) this.places.push(p); }
+
+  // A villager pointed the way: show it on the compass until found.
+  hint(p) { this.addPlace(p); this.hinted.add(p.id); }
+
   get total() { return ECHOES.length; }
-  get placeTotal() { return this.places.length; }
+  get placeTotal() { return this.islandPlaces; }
+  get wildEchoes() { return Object.keys(this.wild.echoes).length; }
+  get wildPlaces() { return Object.keys(this.wild.places).length; }
 
   scan(pos) {
     if (this.scanCooldown > 0) return false;
@@ -132,6 +162,7 @@ export class Secrets {
       const d = Math.hypot(it.x - pos.x, it.z - pos.z);
       if (d < 5.5 && Math.abs(it.y - pos.y) < 8) {
         this.collected.add(it.id);
+        if (it.site) this.wild.echoes[it.id] = { title: it.title, text: it.text };
         it.g.visible = false;
         events.push({ type: 'echo', item: it });
       }
@@ -143,6 +174,8 @@ export class Secrets {
       if (d > p.r) continue;
       if (p.kind === 'valley' && !valleyAt(pos.x, pos.z)) continue;
       this.discovered.add(p.id);
+      this.hinted.delete(p.id);
+      if (p.wild) this.wild.places[p.id] = { name: p.name, text: p.text, kind: p.kind, x: p.x, z: p.z };
       events.push({ type: 'place', place: p });
     }
     return events;
@@ -152,6 +185,7 @@ export class Secrets {
   markers() {
     const m = [];
     for (const it of this.items) if (it.scanned > 0 && !this.collected.has(it.id)) m.push({ x: it.x, z: it.z, kind: 'echo' });
+    for (const p of this.places) if (this.hinted.has(p.id) && !this.discovered.has(p.id)) m.push({ x: p.x, z: p.z, kind: 'hint' });
     return m;
   }
 

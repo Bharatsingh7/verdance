@@ -11,16 +11,17 @@ const cyl = (a, b, h, s = 8, open = false) => new THREE.CylinderGeometry(a, b, h
 const ico = (r, d = 0) => new THREE.IcosahedronGeometry(r, d);
 const cone = (r, h, s = 6) => new THREE.ConeGeometry(r, h, s);
 
-const CONCRETE = [0xb9b4a8, 0xa8a59c, 0xc4bdae, 0x9d9a92, 0xb3aa98];
-const MOSS = [0x5e8a3a, 0x6f9a42, 0x4f7d34];
-const RUST = [0x8a4f2e, 0x9a6a3e, 0x7a5a48, 0x5f7a8a, 0x8a3a32, 0xb8a888];
-const DARKWIN = 0x2c3236;
+export const CONCRETE = [0xb9b4a8, 0xa8a59c, 0xc4bdae, 0x9d9a92, 0xb3aa98];
+export const MOSS = [0x5e8a3a, 0x6f9a42, 0x4f7d34];
+export const RUST = [0x8a4f2e, 0x9a6a3e, 0x7a5a48, 0x5f7a8a, 0x8a3a32, 0xb8a888];
+export const DARKWIN = 0x2c3236;
 
 const MATS = staticMats();
 
-class Kit {
-  constructor(world, ox, oz, seed) {
+export class Kit {
+  constructor(world, ox, oz, seed, mats = MATS) {
     this.b = new Builder();
+    this.mats = mats;
     this.world = world;
     this.ox = ox; this.oz = oz;
     this.rnd = mulberry32(seed);
@@ -34,6 +35,8 @@ class Kit {
   // rot is the negated mesh rotation.y (callers pass -ry); physics wants ry.
   collideBox(lx, lz, hw, hd, rot, y0, top) { this.colliders.push({ x: this.ox + lx, z: this.oz + lz, hw, hd, rot: -rot, y0, top }); }
   collideCircle(lx, lz, r, y0, top) { this.colliders.push({ x: this.ox + lx, z: this.oz + lz, r, y0, top }); }
+  // A driveable surface (bridge, dock, ramp) at height top.
+  deck(lx, lz, hw, hd, rot, top) { this.colliders.push({ x: this.ox + lx, z: this.oz + lz, hw, hd, rot: -rot, top, y0: top - 2, deck: true }); }
 
   // A real tree from the vegetation kit (rooftops, streets, overgrown corners).
   tree(x, y, z, s = 1) {
@@ -136,18 +139,19 @@ class Kit {
 
   build(scene, name) {
     const g = this.b.build();
-    const mesh = new THREE.Mesh(g, MATS);
+    if (!g) return null;
+    const mesh = new THREE.Mesh(g, this.mats);
     mesh.position.set(this.ox, 0, this.oz);
     mesh.castShadow = true; mesh.receiveShadow = true;
     mesh.name = name;
     scene.add(mesh);
-    for (const c of this.colliders) this.world.addStatic(c.x, c.z, c);
+    for (const c of this.colliders) { c.owner = name; this.world.addStatic(c.x, c.z, c); }
     return mesh;
   }
 }
 
 // Canvas-texture sign.
-function sign(text, w, h, bg, fg, font = 'bold 64px sans-serif') {
+export function sign(text, w, h, bg, fg, font = 'bold 64px sans-serif') {
   const cv = document.createElement('canvas'); cv.width = 512; cv.height = Math.round(512 * h / w);
   const x = cv.getContext('2d');
   x.fillStyle = bg; x.fillRect(0, 0, cv.width, cv.height);
@@ -160,7 +164,7 @@ function sign(text, w, h, bg, fg, font = 'bold 64px sans-serif') {
 }
 
 // ---------------------------------------------------------------------------------
-const BUILDERS = {
+export const BUILDERS = {
   city(k) {
     const sp = 46;
     for (let i = -3; i <= 3; i++) for (let j = -3; j <= 3; j++) {
@@ -567,7 +571,7 @@ const BUILDERS = {
 };
 
 // --- Hidden valleys: centrepieces + gates ---------------------------------------------------------
-function valleyPieces(k, v, scene, out) {
+export function valleyPieces(k, v, scene, out) {
   const ga = v.angle, gx = Math.cos(ga), gz = Math.sin(ga);
   const gateD = v.r * 1.15;
   const gpx = gx * gateD, gpz = gz * gateD; // gate position relative to valley centre
@@ -615,7 +619,8 @@ function valleyPieces(k, v, scene, out) {
   }
 
   const y = k.g(0, 0);
-  if (v.id === 'lantern') {
+  const theme = v.theme || v.id;
+  if (theme === 'lantern') {
     // The Mother Tree.
     k.add(cyl(2.2, 3.6, 22, 8), 0x3a3550, 0, y + 11, 0, 0, 0, 0, 1, 1, 1, { shade: 0.15 });
     for (let i = 0; i < 6; i++) { const a = i * 1.05; k.add(cyl(0.5, 1.2, 9, 5), 0x3a3550, Math.cos(a) * 4, y + 1, Math.sin(a) * 4, Math.sin(a) * 0.9, 0, -Math.cos(a) * 0.9); }
@@ -623,7 +628,7 @@ function valleyPieces(k, v, scene, out) {
     k.add(ico(7, 0), 0x9a8cff, 8, y + 22, 4, 0, 0, 0, 1, 0.6, 1, { jitter: 2, glow: 1, shade: 0.3, seed: 22 });
     k.add(ico(6, 0), 0x6ff5dc, -7, y + 23, -5, 0, 0, 0, 1, 0.6, 1, { jitter: 2, glow: 1, shade: 0.3, seed: 23 });
     k.collideCircle(0, 0, 4, y, y + 22);
-  } else if (v.id === 'starfield') {
+  } else if (theme === 'starfield') {
     const ox = -20, oz = 10, oy = k.g(ox, oz);
     k.add(cyl(9, 9, 9, 16), 0xe8e4dc, ox, oy + 4.5, oz, 0, 0, 0, 1, 1, 1, { shade: 0.04 });
     k.add(new THREE.SphereGeometry(9.4, 16, 8, 0.4, Math.PI * 2 - 0.8, 0, Math.PI / 2), 0xd8dce4, ox, oy + 9, oz, 0, 0.6, 0, 1, 1, 1, { shade: 0.05 });
@@ -634,7 +639,7 @@ function valleyPieces(k, v, scene, out) {
     // a bench facing the valley, for sitting
     const by = k.g(12, -18);
     k.add(box(3, 0.2, 0.8), 0x8a6a4a, 12, by + 0.7, -18).add(box(3, 0.8, 0.15), 0x8a6a4a, 12, by + 1.2, -18.4).add(box(0.15, 0.7, 0.7), 0x3a3a3a, 10.8, by + 0.35, -18).add(box(0.15, 0.7, 0.7), 0x3a3a3a, 13.2, by + 0.35, -18);
-  } else if (v.id === 'crystal') {
+  } else if (theme === 'crystal' || theme === 'cavern') {
     const cols = [0xbfa8ff, 0x9fe8ff, 0xe8d0ff, 0x8fd8ff];
     for (let i = 0; i < 9; i++) {
       const a = i * 0.7, r = i ? k.r(3, 9) : 0, s = i ? k.r(2, 4) : 5;
@@ -644,7 +649,7 @@ function valleyPieces(k, v, scene, out) {
     // mine cart and track
     for (let t = -30; t < 30; t += 3) k.add(box(1.8, 0.15, 0.4), 0x5a4a3a, 25 + t * 0.2, k.g(25 + t * 0.2, t) + 0.1, t);
     k.add(box(1.8, 1.2, 2.6), 0x6a5a4a, 26, k.g(26, 5) + 0.9, 5, 0, 0.2, 0.15).add(new THREE.OctahedronGeometry(0.5), 0x9fe8ff, 26, k.g(26, 5) + 1.7, 5, 0, 0, 0, 1, 1.4, 1, { glow: 1 });
-  } else if (v.id === 'glass') {
+  } else if (theme === 'glass' || theme === 'blossom') {
     const dome = new THREE.IcosahedronGeometry(18, 1);
     // keep only the upper half
     const pos = dome.attributes.position;

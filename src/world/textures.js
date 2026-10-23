@@ -59,9 +59,10 @@ export function waterNormals() {
   return waterN;
 }
 
-// --- Foliage atlas: 4 x 3 cells of 256px ----------------------------------------------------
-export const CELL = { broad: 0, pine: 1, jungle: 2, palm: 3, grass: 4, fern: 5, flowers: 6, reed: 7, autumn: 8, birch: 9, ivy: 10, tallgrass: 11 };
-const ROWS = 3, AW = 1024, AH = 256 * ROWS;
+// --- Foliage atlas: 4 x 4 cells of 256px ----------------------------------------------------
+export const CELL = { broad: 0, pine: 1, jungle: 2, palm: 3, grass: 4, fern: 5, flowers: 6, reed: 7, autumn: 8, birch: 9, ivy: 10, tallgrass: 11, blossom: 12, acacia: 13, snowpine: 14, kelp: 15 };
+export const ROWS = 4;
+const AW = 1024, AH = 256 * ROWS;
 export function cellUV(cell) {
   const cx = cell % 4, cy = Math.floor(cell / 4);
   const pu = 2 / AW, pv = 2 / AH;
@@ -86,9 +87,10 @@ function paintCell(x, cell, rnd) {
   x.save();
   x.beginPath(); x.rect(0, 0, 256, 256); x.clip();
   switch (cell) {
-    case CELL.broad: case CELL.autumn: case CELL.birch: case CELL.ivy: {
-      const hue = cell === CELL.autumn ? [18, 48] : cell === CELL.birch ? [72, 92] : cell === CELL.ivy ? [105, 125] : [86, 112];
-      const sat = cell === CELL.autumn ? [55, 80] : [35, 58];
+    case CELL.broad: case CELL.autumn: case CELL.birch: case CELL.ivy: case CELL.blossom: {
+      const bl = cell === CELL.blossom;
+      const hue = cell === CELL.autumn ? [18, 48] : cell === CELL.birch ? [72, 92] : cell === CELL.ivy ? [105, 125] : bl ? [328, 352] : [86, 112];
+      const sat = cell === CELL.autumn ? [55, 80] : bl ? [40, 70] : [35, 58];
       const size = cell === CELL.birch ? [9, 13] : cell === CELL.ivy ? [16, 22] : [13, 20];
       const subs = Array.from({ length: 6 }, () => [128 + R(-60, 60), 128 + R(-55, 55), R(40, 70)]);
       for (let i = 0; i < 620; i++) {
@@ -98,7 +100,7 @@ function paintCell(x, cell, rnd) {
         if (Math.hypot(px - 128, py - 128) > 122) continue;
         // light from the top: upper leaves brighter, inner/lower darker
         const light = 1 - (py / 256) * 0.55 - (1 - r / sr) * 0.25;
-        const L = 14 + light * 30 + R(-4, 4);
+        const L = bl ? 52 + light * 30 + R(-6, 6) : 14 + light * 30 + R(-4, 4);
         const ang = a + R(-0.6, 0.6);
         leaf(x, px, py, R(size[0], size[1]), R(size[0] * 0.35, size[0] * 0.5), ang, hsl(R(hue[0], hue[1]), R(sat[0], sat[1]), L), null);
         if (rnd() < 0.25) leaf(x, px, py, R(size[0] * 0.5, size[0] * 0.8), 1.5, ang, hsl(R(hue[0], hue[1]), 50, Math.min(75, L + 18), 0.6), null);
@@ -107,7 +109,8 @@ function paintCell(x, cell, rnd) {
       if (cell === CELL.broad) { x.fillStyle = hsl(95, 40, 26); x.beginPath(); x.arc(128, 128, 7, 0, Math.PI * 2); x.fill(); }
       break;
     }
-    case CELL.pine: {
+    case CELL.pine: case CELL.snowpine: {
+      const snowy = cell === CELL.snowpine;
       // A spruce spray running left (trunk) to right (tip), drooping; card u maps along the branch.
       const twig = (x0, y0, len, sag, w, depth) => {
         const pts = [];
@@ -126,6 +129,10 @@ function paintCell(x, cell, rnd) {
         if (!depth) for (let k = 0; k < 6; k++) { const t = 0.2 + k * 0.12, [px, py] = pts[Math.floor(t * 20)]; twig(px, py, len * (0.45 - k * 0.04), sag * 0.5 + R(-8, 14), w * 0.75, 1); }
       };
       twig(6, 118, 240, 34, 30, 0);
+      if (snowy) for (let i = 0; i < 260; i++) {
+        const t = rnd(), px = 6 + t * 230, py = 118 + 34 * t * t - R(4, 26);
+        x.fillStyle = hsl(205, 30, R(86, 97), R(0.7, 1)); x.beginPath(); x.ellipse(px, py, R(4, 10), R(2, 4), R(-0.3, 0.3), 0, Math.PI * 2); x.fill();
+      }
       break;
     }
     case CELL.jungle: {
@@ -195,6 +202,27 @@ function paintCell(x, cell, rnd) {
       const gr = x.createLinearGradient(0, 120, 0, 256);
       gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(20,30,10,0.5)');
       x.globalCompositeOperation = 'source-atop'; x.fillStyle = gr; x.fillRect(0, 0, 256, 256); x.globalCompositeOperation = 'source-over';
+      break;
+    }
+    case CELL.acacia: {
+      // Flat-topped crown of tiny leaflets, dense in a horizontal band.
+      for (let i = 0; i < 1400; i++) {
+        const px = 128 + R(-120, 120), py = 128 + R(-1, 1) * 46 * Math.sqrt(1 - ((px - 128) / 122) ** 2);
+        const light = 1 - (py - 82) / 92 * 0.6;
+        leaf(x, px, py, R(6, 10), R(2, 3), R(0, 6.3), hsl(R(72, 96), R(30, 48), 16 + light * 26 + R(-4, 4)), null);
+      }
+      break;
+    }
+    case CELL.kelp: {
+      // Long wavy ribbons from the bottom (holdfast) to the top of the cell.
+      for (let k = 0; k < 7; k++) {
+        const bx = 128 + R(-70, 70), w = R(10, 18), ph = R(0, 6), amp = R(8, 18);
+        x.fillStyle = hsl(R(55, 85), R(40, 60), R(22, 36));
+        x.beginPath();
+        for (let i = 0; i <= 24; i++) { const t = i / 24, y = 256 - t * 252; x.lineTo(bx + Math.sin(t * 9 + ph) * amp - w * (1 - t * 0.5), y); }
+        for (let i = 24; i >= 0; i--) { const t = i / 24, y = 256 - t * 252; x.lineTo(bx + Math.sin(t * 9 + ph) * amp + w * (1 - t * 0.5), y); }
+        x.fill();
+      }
       break;
     }
     case CELL.reed: {

@@ -1,8 +1,8 @@
 // Quality presets + automatic downgrade when the frame rate stays low.
 export const PRESETS = [
-  { name: 'Low', pixel: 0.85, view: 800, veg: 220, near: 70, density: 0.4, shadows: 0 },
-  { name: 'Medium', pixel: 1, view: 1100, veg: 320, near: 100, density: 0.65, shadows: 1 },
-  { name: 'High', pixel: 1.5, view: 1400, veg: 420, near: 130, density: 0.85, shadows: 2 },
+  { name: 'Low', pixel: 0.85, view: 800, veg: 220, near: 70, density: 0.4, shadows: 0, npcs: 8, sites: 600, underwater: 0 },
+  { name: 'Medium', pixel: 1, view: 1100, veg: 320, near: 100, density: 0.65, shadows: 1, npcs: 20, sites: 800, underwater: 1 },
+  { name: 'High', pixel: 1.5, view: 1400, veg: 420, near: 130, density: 0.85, shadows: 2, npcs: 40, sites: 1000, underwater: 2 },
 ];
 
 export class Quality {

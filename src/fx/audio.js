@@ -23,7 +23,9 @@ export class Audio {
     const ctx = (this.ctx = new AC());
     this.master = ctx.createGain(); this.master.gain.value = 0.9;
     const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -18; comp.ratio.value = 3;
-    this.master.connect(comp).connect(ctx.destination);
+    // Everything passes a low-pass that closes when the camera goes under water.
+    this.under = ctx.createBiquadFilter(); this.under.type = 'lowpass'; this.under.frequency.value = 20000; this.under.Q.value = 0.4;
+    this.master.connect(this.under).connect(comp).connect(ctx.destination);
 
     // Reverb send
     this.verb = ctx.createConvolver();
@@ -129,9 +131,30 @@ export class Audio {
     } else this.nextMusic = t + 0.5;
   }
 
+  // Sonar ping (the scanner while submerged).
+  sonar() {
+    if (!this.ctx) return;
+    const t = this.t;
+    this.tone(1250, t, 1.6, { vol: 0.09, out: this.sfx });
+    this.tone(1250, t + 0.9, 1.2, { vol: 0.03, out: this.sfx });
+  }
+
+  // A hammer knock from someone building nearby (vol 0..1, pan -1..1).
+  knock(vol, pan = 0) {
+    if (!this.ctx || vol < 0.02) return;
+    const t = this.t, ctx = this.ctx;
+    const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.setValueAtTime(420, t); o.frequency.exponentialRampToValueAtTime(140, t + 0.08);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.18 * vol, t + 0.005); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+    const p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    if (p) { p.pan.value = pan; o.connect(g).connect(p).connect(this.sfx); } else o.connect(g).connect(this.sfx);
+    o.start(t); o.stop(t + 0.15);
+  }
+
   update(dt, s) {
     if (!this.ctx || this.ctx.state !== 'running') return;
     const t = this.t;
+    this.under.frequency.setTargetAtTime(s.underwater ? 520 : 20000, t, 0.15);
+    this.hov.type = s.sub ? 'triangle' : 'sine';
     const sp = Math.abs(s.speed);
     this.wind.g.gain.setTargetAtTime(0.05 + Math.min(0.3, sp * 0.008) + s.altitude * 0.0012 + (s.drone ? 0.05 : 0), t, 0.3);
     this.wind.f.frequency.setTargetAtTime(380 + sp * 18 + Math.sin(t * 0.3) * 120, t, 0.3);
@@ -141,15 +164,15 @@ export class Audio {
     this.eng.gain.setTargetAtTime(s.drone ? 0.02 : (0.05 + Math.min(0.09, sp * 0.004)) * (1 - hov), t, 0.15);
     this.o1.frequency.setTargetAtTime(36 + sp * 1.5, t, 0.2);
     this.o2.frequency.setTargetAtTime(72 + sp * 3, t, 0.2);
-    this.hovG.gain.setTargetAtTime(hov * (0.02 + sp * 0.0008), t, 0.2);
-    this.hov.frequency.setTargetAtTime(200 + sp * 6, t, 0.2);
+    this.hovG.gain.setTargetAtTime(Math.max(hov, s.sub ? 1 : 0) * (0.02 + sp * 0.0008) * (s.sub ? 1.6 : 1), t, 0.2);
+    this.hov.frequency.setTargetAtTime(s.sub ? 90 + sp * 5 : 200 + sp * 6, t, 0.2);
 
     if (t > this.nextBird) {
-      if (Math.random() < s.birds * s.daylight) this.bird(Math.random() * 1.6 - 0.8);
+      if (!s.underwater && Math.random() < s.birds * s.daylight) this.bird(Math.random() * 1.6 - 0.8);
       this.nextBird = t + 0.8 + Math.random() * 3.5;
     }
     if (t > this.nextCricket) {
-      if (Math.random() < s.crickets * (1 - s.daylight)) this.cricket(Math.random() * 1.6 - 0.8);
+      if (!s.underwater && Math.random() < s.crickets * (1 - s.daylight)) this.cricket(Math.random() * 1.6 - 0.8);
       this.nextCricket = t + 0.25 + Math.random() * 0.8;
     }
     this.music_();

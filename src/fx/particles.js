@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { mulberry32, smoothstep } from '../core/rng.js';
 import { makeNoise2D } from '../core/noise.js';
-import { MEADOW, FOREST, RAINFOREST, DESERT, CANYON, MOUNTAIN, WETLAND } from '../world/biomes.js';
+import { MEADOW, FOREST, RAINFOREST, DESERT, CANYON, MOUNTAIN, WETLAND, AUTUMN, TAIGA, SAVANNA, REDWOOD, BLOSSOM } from '../world/biomes.js';
 
 const LAYERS = {
   pollen:    { n: 500, box: [90, 30, 90], size: 3.5, color: 0xfff6d8, fall: -0.15, drift: [0.6, 0.3], turb: 1.2, shape: 0, blink: 0 },
@@ -10,6 +10,9 @@ const LAYERS = {
   rain:      { n: 1600, box: [70, 40, 70], size: 14, color: 0xcfe2ee, fall: 26, drift: [1.5, 0.5], turb: 0, shape: 2, blink: 0 },
   dust:      { n: 500, box: [100, 25, 100], size: 3, color: 0xf0d8b0, fall: 0.05, drift: [5, 1.5], turb: 0.8, shape: 0, blink: 0 },
   snow:      { n: 1000, box: [80, 40, 80], size: 4.5, color: 0xffffff, fall: 2.2, drift: [1, 0.4], turb: 0.8, shape: 0, blink: 0 },
+  petals:    { n: 380, box: [80, 30, 80], size: 5, color: 0xf7c6d4, fall: 0.6, drift: [1.0, 0.4], turb: 1.6, shape: 3, blink: 0 },
+  motes:     { n: 420, box: [60, 30, 60], size: 2.6, color: 0xfff0c0, fall: -0.05, drift: [0.15, 0.1], turb: 0.6, shape: 0, blink: 0 },
+  marine:    { n: 700, box: [50, 30, 50], size: 2.4, color: 0xd8f0ec, fall: 0.12, drift: [0.25, 0.1], turb: 0.5, shape: 0, blink: 0 },
   fireflies: { n: 260, box: [70, 12, 70], size: 6, color: 0xd8ff7a, fall: 0, drift: [0, 0], turb: 2.0, shape: 0, blink: 1 },
 };
 
@@ -43,6 +46,7 @@ const frag = `
     float b = mix(1.0, smoothstep(0.2, 1.0, sin(uTime * (1.0 + vSeed * 2.0) + vSeed * 40.0)), uBlink);
     vec3 col = uColor;
     if (uShape == 1) col = mix(uColor, vec3(0.55, 0.7, 0.3), step(0.5, fract(vSeed * 7.0)));
+    if (uShape == 3) { a = smoothstep(0.5, 0.3, length(c * vec2(1.0, 1.8))); col = mix(uColor, vec3(1.0), 0.3 * fract(vSeed * 5.0)); }
     gl_FragColor = vec4(col, a * uOpacity * b);
     if (gl_FragColor.a < 0.01) discard;
   }`;
@@ -91,22 +95,27 @@ export class Particles {
     const alt = camera.position.y;
     // Rain comes and goes in the rainforest (and lightly elsewhere green).
     const rainCycle = smoothstep(0.0, 0.35, this.rainNoise(t / 240, 0.5));
-    this.raining = rainCycle * (W[RAINFOREST] + W[WETLAND] * 0.3 + W[FOREST] * 0.15);
+    this.raining = rainCycle * (W[RAINFOREST] + W[WETLAND] * 0.3 + W[FOREST] * 0.15 + W[REDWOOD] * 0.3);
     const valley = env.valley;
     const target = {
-      pollen: (W[MEADOW] * 0.9 + W[WETLAND] * 0.3 + (valley?.id === 'starfield' || valley?.id === 'glass' ? 1 : 0)) * day,
-      leaves: W[FOREST] * 0.9 + W[RAINFOREST] * 0.2,
+      pollen: (W[MEADOW] * 0.9 + W[WETLAND] * 0.3 + (valley?.theme === 'starfield' || valley?.theme === 'glass' || valley?.theme === 'blossom' ? 1 : 0)) * day,
+      leaves: W[FOREST] * 0.9 + W[RAINFOREST] * 0.2 + W[AUTUMN] * 1.2,
       rain: this.raining,
-      dust: (W[DESERT] + W[CANYON] * 0.8) * (0.4 + 0.6 * day),
-      snow: W[MOUNTAIN] * smoothstep(120, 170, alt),
-      fireflies: night * (W[MEADOW] + W[FOREST] + W[WETLAND] * 1.5 + W[RAINFOREST]) + (valley?.id === 'lantern' ? 1 : 0),
+      dust: (W[DESERT] + W[CANYON] * 0.8 + W[SAVANNA] * 0.45) * (0.4 + 0.6 * day),
+      snow: W[MOUNTAIN] * smoothstep(120, 170, alt) + W[TAIGA] * 0.7,
+      petals: W[BLOSSOM] + (valley?.theme === 'blossom' ? 1 : 0),
+      motes: W[REDWOOD] * (0.3 + 0.7 * day),
+      fireflies: night * (W[MEADOW] + W[FOREST] + W[WETLAND] * 1.5 + W[RAINFOREST] + W[AUTUMN] + W[BLOSSOM] + W[SAVANNA] * 0.5 + W[REDWOOD]) + (valley?.theme === 'lantern' || valley?.theme === 'cavern' ? 1 : 0),
     };
+    // Under water only the drifting marine snow remains.
+    if (env.under) { for (const k of Object.keys(target)) target[k] = 0; target.marine = 1; }
     for (const [name, L] of Object.entries(this.layers)) {
-      L.level += (Math.min(1, target[name] || 0) - L.level) * (1 - Math.exp(-0.8 * dt));
+      const rate = name === 'marine' || env.under ? 4 : 0.8; // crossing the surface switches layers quickly
+      L.level += (Math.min(1, target[name] || 0) - L.level) * (1 - Math.exp(-rate * dt));
       L.m.uniforms.uOpacity.value = L.level * (name === 'rain' ? 0.45 : name === 'fireflies' ? 1 : 0.8);
       L.pts.visible = L.level > 0.02;
     }
-    if (valley?.id === 'lantern') this.layers.fireflies.m.uniforms.uColor.value.setHex(0x7affe0);
+    if (valley?.theme === 'lantern' || valley?.theme === 'cavern') this.layers.fireflies.m.uniforms.uColor.value.setHex(0x7affe0);
     else this.layers.fireflies.m.uniforms.uColor.value.setHex(0xd8ff7a);
   }
 }

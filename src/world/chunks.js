@@ -69,7 +69,8 @@ export class World {
 
   inFlight() { let n = 0; for (const w of this.workers) n += w.busy; return n; }
 
-  requestMap(size, half) { return this.send({ type: 'map', size, half }).then((d) => d.img); }
+  // One map tile (world-aligned square `tile` metres across), rendered by a worker.
+  requestMapTile(tx, tz, tile, size) { return this.send({ type: 'map', size, half: tile / 2, ox: (tx + 0.5) * tile, oz: (tz + 0.5) * tile }).then((d) => d.img); }
 
   // How many chunks are still missing near the focus (for the loading screen).
   missingNear(fx, fz, radius, withVeg = false) {
@@ -80,7 +81,7 @@ export class World {
       const cx = ccx + dx, cz = ccz + dz;
       // Same distance measure the streamer uses (to the chunk's near edge), so we never wait on chunks it won't load.
       const d = Math.max(0, Math.hypot((cx + 0.5) * CHUNK - fx, (cz + 0.5) * CHUNK - fz) - CHUNK * 0.5);
-      if (d > radius || Math.abs((cx + 0.5) * CHUNK) > 2300 || Math.abs((cz + 0.5) * CHUNK) > 2300) continue;
+      if (d > radius) continue;
       const c = this.chunks.get(this.key(cx, cz));
       if (!c || !c.mesh || (withVeg && d < this.vegRadius && c.vegState !== 2)) missing++;
     }
@@ -98,7 +99,6 @@ export class World {
       const mx = (cx + 0.5) * CHUNK, mz = (cz + 0.5) * CHUNK;
       const d = Math.max(0, Math.hypot(mx - fx, mz - fz) - CHUNK * 0.5);
       if (d > R) continue;
-      if (Math.abs(mx) > 2300 || Math.abs(mz) > 2300) continue; // open sea beyond: the water plane covers it
       let segs = 8;
       for (const [lim, s] of LODS) if (d < lim) { segs = s; break; }
       const k = this.key(cx, cz);
@@ -224,6 +224,14 @@ export class World {
     const k = this.key(Math.floor(x / CHUNK), Math.floor(z / CHUNK));
     if (!this.statics.has(k)) this.statics.set(k, []);
     this.statics.get(k).push(collider);
+  }
+
+  // Remove every static collider tagged with this owner (a streamed-out site).
+  removeStatics(owner) {
+    for (const [k, list] of this.statics) {
+      const keep = list.filter((c) => c.owner !== owner);
+      if (keep.length) this.statics.set(k, keep); else this.statics.delete(k);
+    }
   }
 
   // Colliders around a point: trunks as [x,z,r] triples + static shapes.

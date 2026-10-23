@@ -11,11 +11,14 @@ import { World } from './world/chunks.js';
 import { Water } from './world/water.js';
 import { buildRuins } from './world/ruins.js';
 import { Secrets } from './world/secrets.js';
+import { SiteManager, placeFor, hiddenNear, warmupGroup } from './world/sites.js';
+import { People } from './world/npc.js';
+import { regionAt } from './world/wilds.js';
 import { shared } from './world/models.js';
-import { preloadPhotos, texProgress, terrainMaterial } from './world/surfaces.js';
-import { heightAt, weightsAt, valleyAt, WATER_LEVEL } from './world/terrain.js';
+import { preloadPhotos, texProgress, terrainMaterial, TEX_ORIGIN, SURF } from './world/surfaces.js';
+import { heightAt, weightsAt, valleyAt, radial, WATER_LEVEL } from './world/terrain.js';
 import { BIOMES, BIOME_COUNT, RAINFOREST, WETLAND } from './world/biomes.js';
-import { SPAWN, WORLD_HALF } from './world/features.js';
+import { SPAWN } from './world/features.js';
 import { Atmosphere } from './fx/sky.js';
 import { Particles } from './fx/particles.js';
 import { Wildlife } from './fx/wildlife.js';
@@ -66,11 +69,17 @@ const secrets = new Secrets(scene, save);
 const particles = new Particles(scene);
 const wildlife = new Wildlife(scene);
 const tracks = new Tracks(scene);
+const people = new People(scene);
+const sites = new SiteManager(scene, world, people, secrets, save);
+const met = save?.met ?? [];
+const warm = warmupGroup();
+scene.add(warm);
 
 const start = save?.pos ?? { x: SPAWN.x, z: SPAWN.z, heading: SPAWN.heading };
 const vehicle = new Vehicle(start.x, start.z, start.heading);
 vehicle.hover = !!save?.hover;
 vehicle.hoverT = vehicle.hover ? 1 : 0;
+if (save?.sub && vehicle.canDive()) { vehicle.sub = true; vehicle.subT = 1; vehicle.pos.y = heightAt(vehicle.pos.x, vehicle.pos.z) + 3; }
 vehicle.distance = save?.distance ?? 0;
 const truck = new Truck(scene);
 const rig = new CameraRig(camera);
@@ -78,7 +87,7 @@ const input = new Input(renderer.domElement);
 const audio = new Audio();
 audio.station = save?.station ?? 1;
 const hud = new HUD();
-const map = new MapView(WORLD_HALF);
+const map = new MapView((tx, tz, tile, size) => world.requestMapTile(tx, tz, tile, size));
 map.loadExplored(save?.explored);
 const journal = new Journal();
 if (touch) setupTouch(input);
@@ -93,10 +102,12 @@ function applyQuality(p) {
   renderer.setPixelRatio(Math.min(devicePixelRatio, p.pixel));
   composer.setPixelRatio(Math.min(devicePixelRatio, p.pixel));
   useBloom = p.shadows >= 2;
-  world.setTerrainMaterial(terrainMaterial(p.shadows > 0));
+  world.setTerrainMaterial(terrainMaterial(p.shadows > 0, p.underwater > 0));
+  atmos.underFar = [55, 75, 95][p.underwater];
   particles.pixel.value = Math.min(devicePixelRatio, p.pixel);
   world.viewRadius = p.view; world.vegRadius = p.veg; world.nearRadius = p.near;
   world.shadows = p.shadows > 0;
+  people.cap = p.npcs; sites.radius = p.sites;
   atmos.setShadowQuality(p.shadows);
   if (world.density !== p.density) { world.density = p.density; world.resetVegetation(); }
 }
@@ -106,9 +117,10 @@ applyQuality(quality.preset);
 function persist() {
   writeSave({
     pos: { x: vehicle.pos.x, z: vehicle.pos.z, heading: vehicle.heading },
-    time: atmos.time, hover: vehicle.hover, distance: vehicle.distance, playTime,
+    time: atmos.time, hover: vehicle.hover, sub: vehicle.sub, distance: vehicle.distance, playTime,
     echoes: [...secrets.collected], discovered: [...secrets.discovered], sightings, biomes: [...biomesVisited],
     explored: map.serializeExplored(), quality: quality.auto ? undefined : quality.level, station: audio.station,
+    villages: sites.villages, wild: secrets.wild, hinted: [...secrets.hinted], met,
   });
 }
 addEventListener('pagehide', persist);
@@ -120,7 +132,6 @@ const beginBtn = document.getElementById('begin');
 const loadbar = document.querySelector('#loadbar i');
 beginBtn.addEventListener('click', begin);
 addEventListener('keydown', (e) => { if (!started && !beginBtn.disabled && (e.code === 'Enter' || e.code === 'Space')) begin(); });
-let mapRequested = false;
 let compileState = null;
 
 function begin() {
@@ -130,6 +141,7 @@ function begin() {
   document.getElementById('title').classList.add('gone');
   setTimeout(() => (document.getElementById('title').hidden = true), 1300);
   hud.show();
+  scene.remove(warm);
   const b = currentBiome;
   hud.showBanner(BIOMES[b].name, save ? 'welcome back' : 'the world, after');
   if (!save) setTimeout(() => hud.toast('info', 'A note', 'Take your time.', 'There is nowhere you need to be. Follow the old roads, or don\'t. Press Q to listen for echoes nearby.', 10), 5000);
@@ -141,10 +153,10 @@ for (const b of document.querySelectorAll('[data-close]')) b.addEventListener('c
 for (const o of document.querySelectorAll('.overlay')) o.addEventListener('pointerdown', (e) => { if (e.target === o) closeOverlays(); });
 
 function mapState() {
-  return { places: secrets.places, discovered: secrets.discovered, items: secrets.items, collected: secrets.collected, px: vehicle.pos.x, pz: vehicle.pos.z, heading: vehicle.heading };
+  return { places: secrets.places, discovered: secrets.discovered, hinted: secrets.hinted, items: secrets.items, collected: secrets.collected, px: vehicle.pos.x, pz: vehicle.pos.z, heading: vehicle.heading };
 }
 function journalState() {
-  return { places: secrets.places, discovered: secrets.discovered, collected: secrets.collected, sightings, biomes: biomesVisited, distance: vehicle.distance, playTime };
+  return { places: secrets.places, discovered: secrets.discovered, collected: secrets.collected, sightings, biomes: biomesVisited, distance: vehicle.distance, playTime, met, wildEchoes: secrets.wild.echoes };
 }
 
 // --- Main loop --------------------------------------------------------------------------------
@@ -152,11 +164,11 @@ const W = new Float32Array(BIOME_COUNT);
 const fogCol = new THREE.Color();
 const tmpC = new THREE.Color();
 const camDir = new THREE.Vector3();
-let currentBiome = 0, biomeHold = 0, lastValley = null;
+let currentBiome = 0, biomeHold = 0, lastValley = null, currentRegion = null;
 let photo = false, timeScale = 1;
 let last = performance.now(), t = 0;
 let saveTimer = 0, hudTimer = 0, slowTimer = 0, mapTimer = 0, waterNear = 0;
-let steerSmooth = 0;
+let steerSmooth = 0, knockTimer = 0;
 
 function handleKeys() {
   const overlay = map.open || journal.open;
@@ -165,8 +177,13 @@ function handleKeys() {
   if (input.hit('Escape')) { closeOverlays(); if (photo) { photo = false; hud.setPhoto(false); } }
   if (overlay) return;
   const drone = rig.mode === 'drone';
-  if (input.hit('KeyQ') && !drone) { if (secrets.scan(vehicle.pos)) audio.scan(); }
-  if (input.hit('KeyH')) {
+  if (input.hit('KeyQ') && !drone) { if (secrets.scan(vehicle.pos)) { if (vehicle.sub) audio.sonar(); else audio.scan(); } }
+  if (input.hit('KeyB')) {
+    if (vehicle.sub) { vehicle.sub = false; audio.hover(false); hud.toast('info', 'Rover', 'Surfacing', '', 2.5); }
+    else if (vehicle.canDive()) { vehicle.sub = true; vehicle.hover = false; audio.hover(true); hud.toast('info', 'Rover', 'Submarine mode', touch ? 'Rise and Dive buttons to change depth. Sub again to surface.' : 'E to rise, F to dive, B to surface. Q pings the sonar.', 5); }
+    else hud.prompt('Find deeper water to dive', 2.5);
+  }
+  if (input.hit('KeyH') && !vehicle.sub) {
     vehicle.hover = !vehicle.hover; audio.hover(vehicle.hover);
     hud.toast('info', 'Rover', vehicle.hover ? 'Hover mode' : 'Wheels down', vehicle.hover ? 'Wheels fold away. Glide over water and sand.' : '', 3);
   }
@@ -176,8 +193,21 @@ function handleKeys() {
   if (input.hit('KeyM')) { const s = audio.nextStation(); hud.toast('info', 'Radio', s, '', 2.5); }
   if (input.hit('Space') && !drone) { audio.honk(); wildlife.startle(vehicle.pos); }
   if (input.hit('KeyR')) vehicle.reset();
+  if (input.hit('KeyF') && !vehicle.sub) talk();
   if (input.hit('KeyG')) { quality.set(quality.level + 1, true); hud.toast('info', 'Graphics', PRESETS[quality.level].name + ' quality', '', 2.5); }
   if (input.hit('KeyN')) { audio.setMuted(!audio.muted); hud.toast('info', 'Sound', audio.muted ? 'Muted' : 'Sound on', '', 2); }
+}
+
+// Talk to the nearest person (the rover has to be nearly stopped).
+function talk() {
+  if (Math.abs(vehicle.speed) > 3) return;
+  const a = people.nearest(vehicle.pos, 11);
+  if (!a) return;
+  const line = people.talk(a, vehicle.pos, (x, z) => hiddenNear(x, z, secrets.discovered));
+  if (line.hint) secrets.hint(placeFor(line.hint));
+  if (!met.some((m) => m.name === a.name && m.site === a.site.name)) { met.push({ name: a.name, site: a.site.name }); persist(); }
+  audio.click();
+  hud.toast('talk', a.site.name, a.name, '“' + line.text + '”' + (line.hint ? ' (marked on your compass)' : ''), 9);
 }
 
 // Cap at ~60 fps: high-refresh monitors would otherwise render 120-240 frames a second for no visible gain.
@@ -196,7 +226,8 @@ function frame(now) {
   const throttle = driving ? input.throttle() : 0;
   const steer = driving ? input.steer() : 0;
   steerSmooth += (steer - steerSmooth) * (1 - Math.exp(-8 * dt));
-  vehicle.update(dt, { throttle, steer, boost: driving && input.down('ShiftLeft', 'ShiftRight') }, world);
+  const dive = driving && vehicle.sub ? (input.down('KeyE', 'SubUp') ? 1 : 0) - (input.down('KeyF', 'SubDown') ? 1 : 0) : 0;
+  vehicle.update(dt, { throttle, steer, dive, boost: driving && input.down('ShiftLeft', 'ShiftRight') }, world);
   if (vehicle.bump > 0.25) audio.thump(vehicle.bump);
   truck.update(dt, vehicle, atmos.isNight, steerSmooth);
   tracks.update(dt, vehicle);
@@ -213,6 +244,8 @@ function frame(now) {
 
   const focus = rig.mode === 'drone' ? camera.position : vehicle.pos;
   world.update(focus);
+  sites.update(dt, focus, { daylight: atmos.daylight }, playTime);
+  TEX_ORIGIN.value.set(Math.round(camera.position.x / 1024) * 1024, 0, Math.round(camera.position.z / 1024) * 1024);
 
   // Biome mood.
   weightsAt(focus.x, focus.z, W);
@@ -225,6 +258,11 @@ function frame(now) {
     }
   } else biomeHold = 0;
   if (started) biomesVisited.add(currentBiome);
+  // Entering a new region of the wilds.
+  if (started && slowTimer <= 0 && radial(focus.x, focus.z) > 2700) {
+    const reg = regionAt(focus.x, focus.z);
+    if (reg.id !== currentRegion) { if (currentRegion) hud.showBanner(reg.name, BIOMES[currentBiome].name.toLowerCase()); currentRegion = reg.id; }
+  } else if (radial(focus.x, focus.z) < 2300) currentRegion = null;
 
   slowTimer -= dt;
   let valley = lastValley;
@@ -237,18 +275,28 @@ function frame(now) {
     for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; if (heightAt(vehicle.pos.x + Math.cos(a) * 30, vehicle.pos.z + Math.sin(a) * 30) < WATER_LEVEL) wn++; }
     waterNear = Math.max(wn / 6, vehicle.floating || vehicle.hover && heightAt(vehicle.pos.x, vehicle.pos.z) < 0 ? 1 : 0);
     if (started) map.reveal(vehicle.pos.x, vehicle.pos.z, 260);
+    // Contextual touch buttons + the depth gauge.
+    const cls = document.body.classList;
+    cls.toggle('on-water', vehicle.sub || vehicle.canDive());
+    cls.toggle('sub', vehicle.sub);
+    cls.toggle('near-person', !vehicle.sub && Math.abs(vehicle.speed) < 3 && !!people.nearest(vehicle.pos, 11));
+    hud.setDepth(started && vehicle.sub ? vehicle.depth : null);
   }
 
   fogCol.setRGB(0, 0, 0);
   for (let i = 0; i < BIOME_COUNT; i++) if (W[i] > 0) fogCol.add(tmpC.setRGB(...BIOMES[i].fog).multiplyScalar(W[i]));
   atmos.biomeFog.lerp(fogCol, 1 - Math.exp(-1.5 * dt));
-  const mist = W[RAINFOREST] * 0.45 + W[WETLAND] * 0.3 + particles.raining * 0.25 + (valley?.id === 'lantern' ? 0.3 : 0);
+  const mist = W[RAINFOREST] * 0.45 + W[WETLAND] * 0.3 + particles.raining * 0.25 + (valley?.theme === 'lantern' ? 0.3 : 0);
   atmos.fogDensity += (Math.max(0.15, 1 - mist) - atmos.fogDensity) * (1 - Math.exp(-0.7 * dt));
 
+  // Under the surface?
+  const underwater = camera.position.y < WATER_LEVEL - 0.1;
+  atmos.under = underwater ? 1 : 0; atmos.underDepth = Math.max(0, -camera.position.y);
+  SURF.time.value = t; SURF.sun.value = Math.max(0.05, atmos.daylight);
   timeScale = started && !overlay && input.down('KeyT') ? 90 : 1;
   atmos.update(dt * timeScale, camera, focus, world.viewRadius);
   water.update(camera, atmos.daylight, t);
-  const env = { daylight: atmos.daylight, valley };
+  const env = { daylight: atmos.daylight, valley, under: underwater };
   // Sun direction in view space + colour, for light shining through leaves.
   shared.sunView.value.copy(atmos.sun.position).sub(atmos.sun.target.position).normalize().transformDirection(camera.matrixWorldInverse);
   shared.sunColor.value.copy(atmos.sun.color).multiplyScalar(atmos.sun.intensity * 0.35);
@@ -275,10 +323,17 @@ function frame(now) {
       persist();
     }
   } else wildlife.update(dt, t, vehicle, env);
+  for (const e of people.update(dt, t, vehicle, env, camera)) if (e.type === 'wave' && started) hud.prompt(touch ? 'Tap Talk to say hello' : 'Stop and press F to talk', 3);
+  // Somebody hammering nearby?
+  knockTimer -= dt;
+  if (knockTimer <= 0 && started) {
+    knockTimer = 0.5 + Math.random() * 0.35;
+    for (const a of people.agents) if (a.state === 'hammer') { const d = Math.hypot(a.x - camera.position.x, a.z - camera.position.z); if (d < 70) { audio.knock(1 - d / 70, Math.max(-1, Math.min(1, (a.x - camera.position.x) / 30))); break; } }
+  }
 
   audio.update(dt, {
     speed: rig.mode === 'drone' ? 0 : vehicle.speed, altitude: Math.max(0, camera.position.y), drone: rig.mode === 'drone', hover: vehicle.hoverT,
-    rain: particles.raining, water: waterNear, daylight: atmos.daylight,
+    rain: particles.raining, water: waterNear, daylight: atmos.daylight, underwater, sub: vehicle.sub,
     birds: W.reduce((s, w, i) => s + w * BIOMES[i].birds, 0), crickets: W.reduce((s, w, i) => s + w * BIOMES[i].crickets, 0),
   });
 
@@ -288,9 +343,10 @@ function frame(now) {
     camera.getWorldDirection(camDir);
     hud.update(1 / 20, {
       hours: atmos.hours, speed: rig.mode === 'drone' ? 0 : vehicle.speed,
-      mode: rig.mode === 'drone' ? 'drone' : vehicle.hover ? 'hover' : vehicle.floating ? 'floating' : timeScale > 1 ? 'time passing' : '',
+      mode: rig.mode === 'drone' ? 'drone' : vehicle.sub ? 'submarine' : vehicle.hover ? 'hover' : vehicle.floating ? 'floating' : timeScale > 1 ? 'time passing' : '',
       radio: audio.station ? '♪ ' + STATIONS[audio.station] : '',
-      echoes: secrets.collected.size, echoTotal: secrets.total, places: secrets.discovered.size, placeTotal: secrets.placeTotal,
+      echoes: secrets.collected.size - secrets.wildEchoes, echoTotal: secrets.total, places: secrets.discovered.size - secrets.wildPlaces, placeTotal: secrets.placeTotal,
+      wildEchoes: secrets.wildEchoes, wildPlaces: secrets.wildPlaces,
       yaw: Math.atan2(camDir.x, -camDir.z), px: camera.position.x, pz: camera.position.z, markers: secrets.markers(),
     });
   }
@@ -309,10 +365,6 @@ function frame(now) {
     }
     if (compileState === 'done' && beginBtn.disabled) { beginBtn.disabled = false; beginBtn.textContent = save ? 'Continue' : 'Begin'; }
   }
-  if (!mapRequested && world.missingNear(vehicle.pos.x, vehicle.pos.z, 260) === 0) {
-    mapRequested = true;
-    world.requestMap(512, WORLD_HALF).then((img) => map.setBase(img, 512));
-  }
 
   quality.sample(dt);
   saveTimer += dt;
@@ -324,4 +376,4 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Debug hook for automated checks.
-window.__verdance = { vehicle, world, atmos, secrets, rig, quality, camera, begin, input, bloom, renderer, scene };
+window.__verdance = { vehicle, world, atmos, secrets, rig, quality, camera, begin, input, bloom, renderer, scene, sites, people };

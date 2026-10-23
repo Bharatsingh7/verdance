@@ -65,6 +65,7 @@ export class Atmosphere {
     this.horizon = new THREE.Color();
     this.biomeFog = new THREE.Color(0xcfe0d8);
     this.fogDensity = 1;
+    this.under = 0; this.underDepth = 0; this.underFar = 80;
     this.daylight = 1;
 
     this.uniforms = {
@@ -190,6 +191,17 @@ export class Atmosphere {
     const far = viewRadius * (0.75 + 0.25 * this.fogDensity);
     this.scene.fog.far = far;
     this.scene.fog.near = far * (0.05 + 0.2 * this.fogDensity);
+    // Under water: a short blue-green fog that darkens with depth; the sky is hidden.
+    const uw = this.under > 0;
+    if (uw) {
+      const k = Math.exp(-this.underDepth / 32) * (0.2 + 0.8 * this.daylight);
+      this.scene.fog.color.setRGB(0.035 * k + 0.003, 0.2 * k + 0.008, 0.23 * k + 0.012);
+      this.scene.fog.near = 1;
+      this.scene.fog.far = this.underFar * (0.55 + 0.45 * Math.exp(-this.underDepth / 40));
+      this.scene.environmentIntensity *= 0.5;
+    }
+    this.sky.visible = this.stars.visible = !uw;
+    for (const c of this.clouds) c.g.visible = !uw;
 
     // Clouds drift and wrap around the camera; tinted by the hour.
     this.cloudMat.color.copy(U.uGlow.value).lerp(this._hs.set(0xffffff), 0.35 + 0.6 * (1 - U.uGlowAmt.value)).multiplyScalar(0.12 + 0.95 * this.daylight);

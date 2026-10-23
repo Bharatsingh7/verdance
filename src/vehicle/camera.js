@@ -68,15 +68,20 @@ export class CameraRig {
     if (!this.init) { this.yawSmooth = v.heading; }
 
     const yaw = this.yawSmooth + this.orbitYaw + Math.PI;
-    const dist = this.dist + Math.max(0, v.speed) * 0.12;
+    const dist = (this.dist + Math.max(0, v.speed) * 0.12) * (v.sub ? 0.85 : 1);
     const p = this.orbitPitch;
     const target = this._v.set(v.pos.x + Math.sin(yaw) * Math.cos(p) * dist, v.pos.y + 2.2 + Math.sin(p) * dist, v.pos.z + Math.cos(yaw) * Math.cos(p) * dist);
-    const ground = Math.max(heightAt(target.x, target.z), WATER_LEVEL) + 1.6;
+    // Under water with the sub: stay below the surface (never straddle it); otherwise stay above it.
+    const below = v.sub && v.depth > 2.2;
+    const ground = below ? heightAt(target.x, target.z) + 1.2 : Math.max(heightAt(target.x, target.z), WATER_LEVEL) + 1.6;
     if (target.y < ground) target.y = ground;
+    if (below && target.y > WATER_LEVEL - 0.8) target.y = WATER_LEVEL - 0.8;
 
     if (!this.init) { this.pos.copy(target); this.look.copy(v.pos); this.init = true; }
     this.pos.lerp(target, 1 - Math.exp(-6 * dt));
-    this.pos.y = Math.max(this.pos.y, ground);
+    this.pos.y = Math.max(this.pos.y, below ? heightAt(this.pos.x, this.pos.z) + 1.0 : Math.max(heightAt(this.pos.x, this.pos.z), WATER_LEVEL) + 1.2);
+    if (below) this.pos.y = Math.min(this.pos.y, WATER_LEVEL - 0.8);
+    else if (this.pos.y < WATER_LEVEL + 0.8) this.pos.y = WATER_LEVEL + 0.8;
     // Never sit inside a tree trunk: slide out of nearby trunk colliders.
     if (world) {
       const c = world.collidersNear(this.pos.x, this.pos.z, this.col);

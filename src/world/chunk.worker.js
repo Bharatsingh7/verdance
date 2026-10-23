@@ -9,7 +9,7 @@ self.onmessage = (e) => {
     const r = buildVegetation(m.cx, m.cz, m.density);
     self.postMessage({ type: 'veg', id: m.id, veg: r }, Object.values(r).map((a) => a.buffer));
   } else if (m.type === 'map') {
-    const img = buildMap(m.size, m.half);
+    const img = buildMap(m.size, m.half, m.ox, m.oz);
     self.postMessage({ type: 'map', id: m.id, img }, [img.buffer]);
   }
 };

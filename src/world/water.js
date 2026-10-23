@@ -13,7 +13,7 @@ export class Water {
     nrm.repeat.set(1800 / TILE, 1800 / TILE);
     const mat = new THREE.MeshStandardMaterial({
       color: 0x1f5866, transparent: true, opacity: 0.8, roughness: 0.1, metalness: 0.0,
-      normalMap: nrm, normalScale: new THREE.Vector2(0.35, 0.35),
+      normalMap: nrm, normalScale: new THREE.Vector2(0.35, 0.35), side: THREE.DoubleSide,
     });
     mat.onBeforeCompile = (sh) => {
       sh.uniforms.uTime = shared.time;
@@ -49,9 +49,13 @@ export class Water {
     this.far.position.x = this.near.position.x; this.far.position.z = this.near.position.z;
     // Plane UV v runs opposite to world z after rotation; keep the texture fixed in world space while snapping.
     const n = this.mat.normalMap;
-    n.offset.set(this.near.position.x / TILE + t * 0.02, -this.near.position.z / TILE + t * 0.013);
+    // (the snapped position is a whole number of tiles, so only the slow drift matters; kept small for precision)
+    n.offset.set((t * 0.02) % 1, (t * 0.013) % 1);
     const c = 0.3 + 0.7 * daylight;
-    this.mat.color.setRGB(0.015 * c, 0.075 * c, 0.085 * c);
+    // Seen from below, the surface is a bright, silvery ceiling.
+    const under = camera.position.y < WATER_LEVEL;
+    if (under) this.mat.color.setRGB(0.12 * c, 0.34 * c, 0.36 * c); else this.mat.color.setRGB(0.015 * c, 0.075 * c, 0.085 * c);
+    this.mat.opacity = under ? 0.95 : 0.8;
     this.far.material.color.copy(this.mat.color);
   }
 }

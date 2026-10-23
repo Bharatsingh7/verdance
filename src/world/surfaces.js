@@ -12,12 +12,15 @@ const loader = new THREE.TextureLoader(manager);
 const T = {};
 // Mean colour (linear) of each albedo, so tinted surfaces can use the texture as detail around 1.0.
 const MEAN = {};
+// 1 once an albedo has loaded (lazily loaded sets fall back to plain vertex colour until then).
+const READY = {};
 
 export function photo(name, kind = 'albedo', channel = 0) {
   const file = name + '_' + kind, key = file + channel;
   if (T[key]) return T[key];
   const t = loader.load(`./textures/${file}.jpg`, (tex) => {
     if (kind !== 'albedo') return;
+    READY[name].value = 1;
     try {
       const cv = document.createElement('canvas'); cv.width = cv.height = 8;
       const x = cv.getContext('2d'); x.drawImage(tex.image, 0, 0, 8, 8);
@@ -30,7 +33,7 @@ export function photo(name, kind = 'albedo', channel = 0) {
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.anisotropy = 8;
   t.channel = channel;
-  if (kind === 'albedo') { t.colorSpace = THREE.SRGBColorSpace; MEAN[name] ??= { value: new THREE.Vector3(0.25, 0.25, 0.25) }; }
+  if (kind === 'albedo') { t.colorSpace = THREE.SRGBColorSpace; MEAN[name] ??= { value: new THREE.Vector3(0.25, 0.25, 0.25) }; READY[name] ??= { value: 0 }; }
   T[key] = t;
   return t;
 }
@@ -54,44 +57,52 @@ const TRIPLANAR = `
     return normalize(n + d * k);
   }`;
 
+// World-space texturing is done relative to an origin snapped to 1024 m (and every world-space texture scale
+// is a multiple of 1/1024), so coordinates stay small and precise far from the isle without any visible jump.
+export const TEX_ORIGIN = { value: new THREE.Vector3() };
+// Time and sun strength for seabed caustics (set each frame by main).
+export const SURF = { time: { value: 0 }, sun: { value: 1 } };
+const q = (s) => (Math.max(1, Math.round(s * 1024)) / 1024).toFixed(7);
 const VARYINGS_VS = `
-  varying vec3 vWPos; varying vec3 vWN;`;
+  uniform vec3 uTexOrigin; varying vec3 vWPos; varying vec3 vWN;`;
 const VARYINGS_SET = `
   {
     vec4 wp4 = vec4(transformed, 1.0); vec3 wn3 = objectNormal;
     #ifdef USE_INSTANCING
       wp4 = instanceMatrix * wp4; wn3 = mat3(instanceMatrix) * wn3;
     #endif
-    vWPos = (modelMatrix * wp4).xyz; vWN = normalize(mat3(modelMatrix) * wn3);
+    vWPos = (modelMatrix * wp4).xyz - uTexOrigin; vWN = normalize(mat3(modelMatrix) * wn3);
   }`;
 
 // --- Terrain -----------------------------------------------------------------------------------
 const terrainCache = {};
-export function terrainMaterial(normals = true) {
-  const key = normals ? 'n' : 'a';
+export function terrainMaterial(normals = true, caustics = true) {
+  const key = (normals ? 'n' : 'a') + (caustics ? 'c' : '');
   if (terrainCache[key]) return terrainCache[key];
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
-  if (normals) m.defines = { TERRAIN_NORMALS: '' };
+  m.defines = {};
+  if (normals) m.defines.TERRAIN_NORMALS = '';
+  if (caustics) m.defines.CAUSTICS = '';
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, {
       tGrass: { value: photo('grass') }, tDirt: { value: photo('dirt') }, tSand: { value: photo('sand') }, tRock: { value: photo('rock') },
-      tSnow: { value: photo('snow') }, tAsphalt: { value: photo('asphalt') }, uDetail: { value: detailTexture() },
+      uTexOrigin: TEX_ORIGIN, uCTime: SURF.time, uCSun: SURF.sun, tSnow: { value: photo('snow') }, tAsphalt: { value: photo('asphalt') }, uDetail: { value: detailTexture() },
       nGrass: { value: photo('grass', 'normal') }, nDirt: { value: photo('dirt', 'normal') }, nSand: { value: photo('sand', 'normal') }, nRock: { value: photo('rock', 'normal') },
     });
     sh.vertexShader = 'attribute vec4 splat; attribute vec2 splat2; varying vec4 vSplat; varying vec2 vSplat2;' + VARYINGS_VS + '\n' +
       sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vSplat = splat; vSplat2 = splat2;' + VARYINGS_SET);
-    sh.fragmentShader = `uniform sampler2D tGrass, tDirt, tSand, tRock, tSnow, tAsphalt, uDetail, nGrass, nDirt, nSand, nRock;
+    sh.fragmentShader = `uniform sampler2D tGrass, tDirt, tSand, tRock, tSnow, tAsphalt, uDetail, nGrass, nDirt, nSand, nRock; uniform float uCTime, uCSun;
       varying vec4 vSplat; varying vec2 vSplat2;` + VARYINGS_VS + TRIPLANAR + '\n' + sh.fragmentShader
       .replace('#include <color_fragment>', `
         vec2 tp = vWPos.xz;
         vec3 tw = triW(vWN);
-        vec3 cG = vSplat.x > 0.003 ? mix(texture2D(tGrass, tp * 0.23).rgb, texture2D(tGrass, tp * 0.047).rgb, 0.45) : vec3(0.3);
-        vec3 cD = vSplat.y > 0.003 ? mix(texture2D(tDirt, tp * 0.17).rgb, texture2D(tDirt, tp * 0.039).rgb, 0.4) : vec3(0.3);
-        vec3 cS = vSplat.w > 0.003 ? mix(texture2D(tSand, tp * 0.12).rgb, texture2D(tSand, tp * 0.029).rgb, 0.4) : vec3(0.5);
+        vec3 cG = vSplat.x > 0.003 ? mix(texture2D(tGrass, tp * ${q(0.23)}).rgb, texture2D(tGrass, tp * ${q(0.047)}).rgb, 0.45) : vec3(0.3);
+        vec3 cD = vSplat.y > 0.003 ? mix(texture2D(tDirt, tp * ${q(0.17)}).rgb, texture2D(tDirt, tp * ${q(0.039)}).rgb, 0.4) : vec3(0.3);
+        vec3 cS = vSplat.w > 0.003 ? mix(texture2D(tSand, tp * ${q(0.12)}).rgb, texture2D(tSand, tp * ${q(0.029)}).rgb, 0.4) : vec3(0.5);
         // Skip the costly lookups for layers that aren't present here.
-        vec3 cR = vSplat.z > 0.003 ? triTex(tRock, vWPos, tw, 0.055) : vec3(0.35);
-        vec3 cN = vSplat2.x > 0.003 ? texture2D(tSnow, tp * 0.09).rgb : vec3(0.9);
-        vec3 cA = vSplat2.y > 0.003 ? texture2D(tAsphalt, tp * 0.16).rgb * 0.42 : vec3(0.2);
+        vec3 cR = vSplat.z > 0.003 ? triTex(tRock, vWPos, tw, ${q(0.055)}) : vec3(0.35);
+        vec3 cN = vSplat2.x > 0.003 ? texture2D(tSnow, tp * ${q(0.09)}).rgb : vec3(0.9);
+        vec3 cA = vSplat2.y > 0.003 ? texture2D(tAsphalt, tp * ${q(0.16)}).rgb * 0.42 : vec3(0.2);
         // Height-aware blend: brighter texels of a layer win at borders, so transitions look organic.
         vec4 sw = vSplat * vec4(0.35 + dot(cG, vec3(1.2)), 0.35 + dot(cD, vec3(1.2)), 0.35 + dot(cR, vec3(1.2)), 0.35 + dot(cS, vec3(1.2)));
         sw = pow(sw, vec4(1.6)); sw /= max(sw.x + sw.y + sw.z + sw.w, 1e-4);
@@ -101,16 +112,28 @@ export function terrainMaterial(normals = true) {
         vec3 alb = (cG * sw.x + cD * sw.y + cS * sw.w) * soft + cR * sw.z * strong;
         alb = mix(alb, cN * 1.1, smoothstep(0.0, 1.0, vSplat2.x));
         alb = mix(alb, cA, vSplat2.y * 0.9);
-        float macro = texture2D(uDetail, tp * 0.0033).r * 0.6 + texture2D(uDetail, tp * 0.013).r * 0.4;
+        float macro = texture2D(uDetail, tp * ${q(0.0033)}).r * 0.6 + texture2D(uDetail, tp * ${q(0.013)}).r * 0.4;
         alb *= 0.72 + 0.56 * macro;
+        // Below the surface: bluer, darker with depth, with dancing caustics (periods divide 1024 m).
+        if (vWPos.y < -0.2) {
+          float dpt = -vWPos.y;
+          alb *= mix(vec3(1.0), vec3(0.6, 0.85, 0.9), smoothstep(0.5, 10.0, dpt));
+          #ifdef CAUSTICS
+            vec2 cp = vWPos.xz;
+            const float K = 6.2831853 / 1024.0;
+            float c = sin(cp.x * K * 190.0 + uCTime * 1.1) + sin(cp.y * K * 210.0 - uCTime * 0.9) + sin((cp.x + cp.y) * K * 140.0 + uCTime * 0.7) + sin((cp.x - cp.y) * K * 120.0 - uCTime * 1.3);
+            float cs = pow(clamp(1.0 - abs(c) * 0.55, 0.0, 1.0), 6.0);
+            alb *= 1.0 + cs * 1.6 * smoothstep(0.2, 1.5, dpt) * exp(-dpt / 16.0) * uCSun;
+          #endif
+        }
         diffuseColor.rgb = alb;`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         roughnessFactor = 0.96 - 0.3 * vSplat2.x - 0.15 * vSplat2.y;`)
       .replace('#include <normal_fragment_maps>', `
         #ifdef TERRAIN_NORMALS
-          vec3 ts = (texture2D(nGrass, tp * 0.23).xyz * 2.0 - 1.0) * sw.x + (texture2D(nDirt, tp * 0.17).xyz * 2.0 - 1.0) * sw.y + (texture2D(nSand, tp * 0.12).xyz * 2.0 - 1.0) * sw.w;
+          vec3 ts = (texture2D(nGrass, tp * ${q(0.23)}).xyz * 2.0 - 1.0) * sw.x + (texture2D(nDirt, tp * ${q(0.17)}).xyz * 2.0 - 1.0) * sw.y + (texture2D(nSand, tp * ${q(0.12)}).xyz * 2.0 - 1.0) * sw.w;
           vec3 nW = normalize(vWN + vec3(ts.x, 0.0, ts.y) * 0.8 * (1.0 - vSplat2.x));
-          if (sw.z > 0.01) nW = mix(nW, triNrm(nRock, vWPos, vWN, tw, 0.055, 1.1), sw.z);
+          if (sw.z > 0.01) nW = mix(nW, triNrm(nRock, vWPos, vWN, tw, ${q(0.055)}, 1.1), sw.z);
           normal = normalize((viewMatrix * vec4(nW, 0.0)).xyz);
         #endif`);
   };
@@ -121,35 +144,40 @@ export function terrainMaterial(normals = true) {
 
 // --- Ruins: concrete or rusted metal, triplanar, with moss on top surfaces and grime streaks ----------
 const ruinCache = {};
-export function ruinMaterial(kind = 'concrete') {
-  if (ruinCache[kind]) return ruinCache[kind];
-  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: kind === 'rust' ? 0.75 : 0.92, metalness: kind === 'rust' ? 0.35 : 0 });
+// moss / grime scale the weathering (lived-in village houses are clean); scale is metres-per-tile inverse.
+export function ruinMaterial(kind = 'concrete', { moss: mossK = 1, grime = 1, scale, metal } = {}) {
+  const key = kind + mossK + grime + (scale || '');
+  if (ruinCache[key]) return ruinCache[key];
+  const sc = scale ?? (kind === 'rust' ? 0.35 : 0.18);
+  const isMetal = metal ?? (kind === 'rust' || kind === 'panel');
+  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: isMetal ? (kind === 'panel' ? 0.45 : 0.75) : 0.92, metalness: isMetal ? (kind === 'panel' ? 0.6 : 0.35) : 0 });
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, {
-      tAlb: { value: photo(kind) }, tNrm: { value: photo(kind, 'normal') }, uMean: MEAN[kind],
-      tMoss: { value: photo('grass') }, uDetail: { value: detailTexture() },
+      tAlb: { value: photo(kind) }, tNrm: { value: photo(kind, 'normal') }, uMean: MEAN[kind], uReady: READY[kind],
+      tMoss: { value: photo('grass') }, uDetail: { value: detailTexture() }, uTexOrigin: TEX_ORIGIN,
     });
     sh.vertexShader = VARYINGS_VS + '\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>' + VARYINGS_SET);
-    sh.fragmentShader = 'uniform sampler2D tAlb, tNrm, tMoss, uDetail; uniform vec3 uMean;' + VARYINGS_VS + TRIPLANAR + '\n' + sh.fragmentShader
+    sh.fragmentShader = 'uniform sampler2D tAlb, tNrm, tMoss, uDetail; uniform vec3 uMean; uniform float uReady;' + VARYINGS_VS + TRIPLANAR + '\n' + sh.fragmentShader
       .replace('#include <color_fragment>', `
         vec3 tw = triW(vWN);
-        vec3 tex = triTex(tAlb, vWPos, tw, ${kind === 'rust' ? '0.35' : '0.18'});
-        vec3 alb = vColor.rgb * clamp(tex / max(uMean, vec3(0.02)), 0.0, 2.5);
+        vec3 tex = triTex(tAlb, vWPos, tw, ${q(sc)});
+        vec3 alb = vColor.rgb * mix(vec3(1.0), clamp(tex / max(uMean, vec3(0.02)), 0.0, 2.5), uReady);
         // grime streaks running down walls
-        float streak = texture2D(uDetail, vec2((vWPos.x + vWPos.z) * 0.35, vWPos.y * 0.02)).r;
-        alb *= mix(1.0, 0.55 + 0.6 * streak, (1.0 - tw.y) * 0.8);
+        float streak = texture2D(uDetail, vec2((vWPos.x + vWPos.z) * ${q(0.35)}, vWPos.y * 0.02)).r;
+        alb *= mix(1.0, 0.55 + 0.6 * streak, (1.0 - tw.y) * ${(0.8 * grime).toFixed(2)});
         // moss creeps over upward-facing surfaces, in patches
-        float patchN = texture2D(uDetail, vWPos.xz * 0.05 + vWPos.y * 0.01).r;
+        float patchN = texture2D(uDetail, vWPos.xz * ${q(0.05)} + vWPos.y * 0.01).r;
         float moss = smoothstep(0.45, 0.9, vWN.y) * smoothstep(0.35, 0.6, patchN);
-        moss = max(moss, smoothstep(0.62, 0.8, patchN) * 0.6 * (1.0 - tw.y));
-        alb = mix(alb, texture2D(tMoss, vWPos.xz * 0.3).rgb * vec3(0.85, 1.0, 0.75), moss);
+        moss = max(moss, smoothstep(0.62, 0.8, patchN) * 0.6 * (1.0 - tw.y)) * ${mossK.toFixed(2)};
+        alb = mix(alb, texture2D(tMoss, vWPos.xz * ${q(0.3)}).rgb * vec3(0.85, 1.0, 0.75), moss);
         diffuseColor.rgb = alb;`)
       .replace('#include <normal_fragment_maps>', `
-        vec3 nW = triNrm(tNrm, vWPos, normalize(vWN), tw, ${kind === 'rust' ? '0.35' : '0.18'}, 0.9);
+        vec3 nW = triNrm(tNrm, vWPos, normalize(vWN), tw, ${q(sc)}, 0.9 * uReady);
         normal = normalize((viewMatrix * vec4(nW, 0.0)).xyz);`);
   };
-  m.customProgramCacheKey = () => 'ruin' + kind;
-  ruinCache[kind] = m;
+  m.customProgramCacheKey = () => 'ruin' + key;
+  m.userData.shared = true;
+  ruinCache[key] = m;
   return m;
 }
 

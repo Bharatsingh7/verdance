@@ -1,7 +1,7 @@
 // Pure data generation for terrain chunks, vegetation placement and the overview map.
 // Runs inside workers (chunk.worker.js) so the main thread never stalls.
-import { heightAt, sampleHeight, sampleColor, lastWeights, roadMask, lastValley, dominantBiome } from './terrain.js';
-import { hash2, smoothstep } from '../core/rng.js';
+import { heightAt, sampleHeight, sampleColor, lastWeights, roadMask, trailMask, lastValley, dominantBiome, wonderAt, siteClearAt, radial } from './terrain.js';
+import { hash2, smoothstep, lerp } from '../core/rng.js';
 import { makeNoise2D } from '../core/noise.js';
 import { LANDMARKS, TRACK } from './features.js';
 import { BIOMES, BIOME_COUNT } from './biomes.js';
@@ -79,37 +79,53 @@ export function buildTerrain(cx, cz, segs) {
 }
 
 // --- Vegetation ------------------------------------------------------------
-// density per biome: [meadow, forest, rainforest, desert, canyon, mountain, wetland]
+// density per biome: [meadow, forest, rainforest, desert, canyon, mountain, wetland, autumn, taiga, savanna, redwood, blossom]
+// `sea` plants grow on the sea/lake floor between depths sea[0] and sea[1] (density sea[2]), whatever the biome.
+const d = (...v) => { while (v.length < 12) v.push(0); return v; };
 export const VEG = {
-  oak:       { spacing: 9,  dens: [0.12, 0.3, 0, 0, 0, 0.04, 0.08], clump: 0.6, scale: [0.8, 1.3], big: 1 },
-  maple:     { spacing: 12, dens: [0.04, 0.18, 0, 0, 0, 0, 0.03], clump: 0.7, scale: [0.8, 1.2], big: 1 },
-  birch:     { spacing: 8,  dens: [0.05, 0.22, 0, 0, 0, 0.06, 0.05], clump: 0.8, scale: [0.8, 1.2], big: 1 },
-  pine:      { spacing: 6,  dens: [0.02, 0.75, 0, 0, 0.02, 0.5, 0], clump: 0.5, scale: [0.75, 1.5], big: 1, maxH: 175 },
-  jungle:    { spacing: 8,  dens: [0, 0, 0.7, 0, 0, 0, 0], clump: 0.2, scale: [0.8, 1.4], big: 1 },
-  palm:      { spacing: 9,  dens: [0, 0, 0.3, 0.02, 0, 0, 0.05], clump: 0.4, scale: [0.8, 1.3], big: 1 },
-  bush:      { spacing: 5,  dens: [0.12, 0.3, 0.4, 0, 0, 0.1, 0.18], clump: 0.6, scale: [0.6, 1.3] },
-  shrub:     { spacing: 7,  dens: [0.03, 0.25, 0.45, 0, 0, 0.05, 0.1], clump: 0.6, scale: [0.7, 1.3] },
-  fern:      { spacing: 3.5, dens: [0, 0.3, 0.75, 0, 0, 0, 0.15], clump: 0.5, scale: [0.7, 1.4], small: 1 },
-  cactus:    { spacing: 14, dens: [0, 0, 0, 0.18, 0.1, 0, 0], clump: 0.3, scale: [0.7, 1.4] },
-  deadtree:  { spacing: 22, dens: [0.01, 0, 0, 0.08, 0.08, 0.02, 0.06], clump: 0, scale: [0.7, 1.3] },
-  rock:      { spacing: 10, dens: [0.04, 0.1, 0.05, 0.08, 0.2, 0.22, 0.04], clump: 0.5, scale: [0.4, 1.6], slopeOK: 1 },
-  boulder:   { spacing: 28, dens: [0.015, 0.04, 0.01, 0.03, 0.12, 0.15, 0], clump: 0.3, scale: [1, 2.6], slopeOK: 1 },
-  reed:      { spacing: 2.2, dens: [0.3, 0.3, 0.3, 0.1, 0.1, 0, 0.85], clump: 0.5, scale: [0.7, 1.3], small: 1, shore: 1 },
-  lily:      { spacing: 3,  dens: [0, 0, 0.1, 0, 0, 0, 0.5], clump: 0.6, scale: [0.6, 1.3], small: 1, water: 1 },
-  grass:     { spacing: 2.2, dens: [0.7, 0.3, 0.4, 0, 0.02, 0.3, 0.55], clump: 0.4, scale: [0.7, 1.3], small: 1 },
-  tallgrass: { spacing: 3.8, dens: [0.35, 0.08, 0.1, 0, 0, 0.1, 0.3], clump: 0.85, scale: [0.7, 1.2], small: 1 },
-  flower:    { spacing: 3.2, dens: [0.3, 0.05, 0.05, 0, 0, 0.08, 0.06], clump: 0.8, scale: [0.6, 1.2], small: 1 },
-  mushroom:  { spacing: 4,  dens: [0, 0, 0, 0, 0, 0, 0], clump: 0.3, scale: [0.6, 1.6], small: 1 },
-  glowtree:  { spacing: 10, dens: [0, 0, 0, 0, 0, 0, 0], clump: 0.2, scale: [0.9, 1.4], big: 1 },
-  crystal:   { spacing: 6,  dens: [0, 0, 0, 0, 0, 0, 0], clump: 0.4, scale: [0.6, 2.0] },
+  oak:       { spacing: 9,  dens: d(0.12, 0.3, 0, 0, 0, 0.04, 0.08, 0.15, 0, 0.02, 0.05, 0.05), clump: 0.6, scale: [0.8, 1.3], big: 1 },
+  maple:     { spacing: 12, dens: d(0.04, 0.18, 0, 0, 0, 0, 0.03, 0.75, 0, 0, 0.05, 0.04), clump: 0.7, scale: [0.8, 1.2], big: 1 },
+  birch:     { spacing: 8,  dens: d(0.05, 0.22, 0, 0, 0, 0.06, 0.05, 0.25, 0.15, 0, 0.05, 0.1), clump: 0.8, scale: [0.8, 1.2], big: 1 },
+  pine:      { spacing: 6,  dens: d(0.02, 0.75, 0, 0, 0.02, 0.5, 0, 0.1, 0.1, 0, 0.12, 0), clump: 0.5, scale: [0.75, 1.5], big: 1, maxH: 175 },
+  snowpine:  { spacing: 6,  dens: d(0, 0, 0, 0, 0, 0.12, 0, 0, 0.8), clump: 0.5, scale: [0.75, 1.5], big: 1, maxH: 200 },
+  redwood:   { spacing: 13, dens: d(0, 0.02, 0, 0, 0, 0, 0, 0, 0, 0, 0.6), clump: 0.4, scale: [0.8, 1.25], big: 1 },
+  acacia:    { spacing: 16, dens: d(0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0.25), clump: 0.5, scale: [0.8, 1.3], big: 1 },
+  blossom:   { spacing: 9,  dens: d(0.02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.42), clump: 0.6, scale: [0.8, 1.3], big: 1 },
+  jungle:    { spacing: 8,  dens: d(0, 0, 0.7), clump: 0.2, scale: [0.8, 1.4], big: 1 },
+  palm:      { spacing: 9,  dens: d(0, 0, 0.3, 0.02, 0, 0, 0.05, 0, 0, 0.02), clump: 0.4, scale: [0.8, 1.3], big: 1 },
+  bush:      { spacing: 5,  dens: d(0.12, 0.3, 0.4, 0, 0, 0.1, 0.18, 0.25, 0.1, 0.12, 0.2, 0.2), clump: 0.6, scale: [0.6, 1.3] },
+  shrub:     { spacing: 7,  dens: d(0.03, 0.25, 0.45, 0, 0, 0.05, 0.1, 0.2, 0.1, 0.05, 0.35, 0.1), clump: 0.6, scale: [0.7, 1.3] },
+  fern:      { spacing: 3.5, dens: d(0, 0.3, 0.75, 0, 0, 0, 0.15, 0.15, 0.05, 0, 0.85, 0.05), clump: 0.5, scale: [0.7, 1.4], small: 1 },
+  cactus:    { spacing: 14, dens: d(0, 0, 0, 0.18, 0.1, 0, 0, 0, 0, 0.03), clump: 0.3, scale: [0.7, 1.4] },
+  deadtree:  { spacing: 22, dens: d(0.01, 0, 0, 0.08, 0.08, 0.02, 0.06, 0.02, 0.04, 0.05), clump: 0, scale: [0.7, 1.3] },
+  rock:      { spacing: 10, dens: d(0.04, 0.1, 0.05, 0.08, 0.2, 0.22, 0.04, 0.08, 0.15, 0.08, 0.06, 0.05), clump: 0.5, scale: [0.4, 1.6], slopeOK: 1, sea: [-60, -5, 0.12] },
+  boulder:   { spacing: 28, dens: d(0.015, 0.04, 0.01, 0.03, 0.12, 0.15, 0, 0.03, 0.08, 0.05, 0.02, 0.02), clump: 0.3, scale: [1, 2.6], slopeOK: 1, sea: [-60, -6, 0.1] },
+  reed:      { spacing: 2.2, dens: d(0.3, 0.3, 0.3, 0.1, 0.1, 0, 0.85, 0.3, 0.2, 0.2, 0.3, 0.3), clump: 0.5, scale: [0.7, 1.3], small: 1, shore: 1 },
+  lily:      { spacing: 3,  dens: d(0, 0, 0.1, 0, 0, 0, 0.5, 0, 0, 0, 0, 0.1), clump: 0.6, scale: [0.6, 1.3], small: 1, water: 1 },
+  grass:     { spacing: 2.2, dens: d(0.7, 0.3, 0.4, 0, 0.02, 0.3, 0.55, 0.3, 0.2, 0.75, 0.2, 0.65), clump: 0.4, scale: [0.7, 1.3], small: 1 },
+  tallgrass: { spacing: 3.8, dens: d(0.35, 0.08, 0.1, 0, 0, 0.1, 0.3, 0.1, 0.05, 0.9, 0.05, 0.25), clump: 0.85, scale: [0.7, 1.2], small: 1 },
+  flower:    { spacing: 3.2, dens: d(0.3, 0.05, 0.05, 0, 0, 0.08, 0.06, 0.05, 0.02, 0.08, 0.03, 0.6), clump: 0.8, scale: [0.6, 1.2], small: 1 },
+  mushroom:  { spacing: 4,  dens: d(), clump: 0.3, scale: [0.6, 1.6], small: 1 },
+  glowtree:  { spacing: 10, dens: d(), clump: 0.2, scale: [0.9, 1.4], big: 1 },
+  crystal:   { spacing: 6,  dens: d(), clump: 0.4, scale: [0.6, 2.0] },
+  kelp:      { spacing: 4,  dens: d(), clump: 0.7, scale: [0.6, 1.0], sea: [-40, -11.5, 0.45] },
+  seagrass:  { spacing: 2.6, dens: d(), clump: 0.6, scale: [0.7, 1.3], small: 1, sea: [-14, -1.5, 0.6] },
+  coral:     { spacing: 5,  dens: d(), clump: 0.75, scale: [0.6, 1.8], sea: [-22, -3, 0.3] },
 };
 
-// Inside hidden valleys the regular biome mix is replaced.
+// Inside hidden valleys (by theme) and wonders the regular biome mix is replaced.
 const VALLEY_VEG = {
   lantern: { glowtree: 0.5, mushroom: 0.55, fern: 0.6, grass: 0.3, flower: 0.15 },
   starfield: { flower: 0.9, grass: 0.7, oak: 0.05, bush: 0.1 },
   crystal: { crystal: 0.45, rock: 0.25, boulder: 0.1, mushroom: 0.1 },
   glass: { jungle: 0.35, palm: 0.2, fern: 0.6, flower: 0.5, grass: 0.4 },
+  blossom: { blossom: 0.5, flower: 0.8, grass: 0.6, bush: 0.15 },
+  cavern: { mushroom: 0.7, crystal: 0.3, fern: 0.35, glowtree: 0.12, rock: 0.2 },
+};
+const WONDER_VEG = {
+  mushroom: { glowtree: 0.45, mushroom: 0.75, fern: 0.5, grass: 0.25 },
+  petrified: { deadtree: 0.6, rock: 0.35, boulder: 0.12, grass: 0.1 },
+  saltflat: {},
 };
 
 const clumpNoise = makeNoise2D(2024);
@@ -133,6 +149,7 @@ export function buildVegetation(cx, cz, density) {
   const out = {};
   const x0 = cx * CHUNK, z0 = cz * CHUNK;
   let typeIdx = 0;
+  const far = radial(x0 + CHUNK / 2, z0 + CHUNK / 2) > 2500;
   for (const [name, V] of Object.entries(VEG)) {
     typeIdx++;
     const sp = V.spacing / Math.sqrt(V.small ? Math.min(1, density) : density);
@@ -146,19 +163,26 @@ export function buildVegetation(cx, cz, density) {
       const h = sampleHeight(x, z);
       let d = 0;
       const valley = lastValley();
-      if (valley) d = VALLEY_VEG[valley.id][name] || 0;
-      else for (let b = 0; b < BIOME_COUNT; b++) d += lastWeights[b] * V.dens[b];
+      const sea = V.sea && h < V.sea[1] && h > V.sea[0];
+      if (sea) d = V.sea[2];
+      else if (valley) d = VALLEY_VEG[valley.theme][name] || 0;
+      else {
+        for (let b = 0; b < BIOME_COUNT; b++) d += lastWeights[b] * V.dens[b];
+        const w = far ? wonderAt(x, z) : null;
+        if (w && WONDER_VEG[w.type]) d = lerp(WONDER_VEG[w.type][name] || 0, d, smoothstep(w.r * 0.7, w.r, Math.hypot(x - w.x, z - w.z)));
+      }
       if (d <= 0) continue;
       const cl = clumpNoise(x / 70 + typeIdx * 13.1, z / 70);
       d *= 1 - V.clump + V.clump * smoothstep(-0.5, 0.6, cl) * 1.6;
       if (roll > d) continue;
 
-      if (V.water) { if (h > -0.4 || h < -3.5) continue; }
+      if (sea) { /* depth already checked */ }
+      else if (V.water) { if (h > -0.4 || h < -3.5) continue; }
       else if (V.shore) { if (h < -0.5 || h > 1.6) continue; }
       else if (h < 0.7) continue;
       if (V.maxH && h > V.maxH + 15 * clumpNoise(x / 40, z / 40)) continue;
 
-      if (!V.water) {
+      if (!V.water && !sea) {
         const sx = heightAt(x + 1.5, z) - h, sz = heightAt(x, z + 1.5) - h;
         const slope = Math.hypot(sx, sz) / 1.5;
         if (slope > (V.slopeOK ? 1.4 : 0.65)) continue;
@@ -168,6 +192,10 @@ export function buildVegetation(cx, cz, density) {
         let blocked = false;
         for (const c of CLEAR) { const dx = x - c.x, dz = z - c.z; if (dx * dx + dz * dz < c.r2 && !V.small) { blocked = true; break; } }
         if (blocked) continue;
+        if (far) {
+          if (trailMask(x, z) > (V.small ? 0.7 : 0.2)) continue;
+          if (!V.small && siteClearAt(x, z)) continue;
+        }
       }
       const s = V.scale[0] + (V.scale[1] - V.scale[0]) * hash2(gx, gz, typeIdx + 200);
       let r = -1, g = -1, bl = -1;
@@ -180,12 +208,13 @@ export function buildVegetation(cx, cz, density) {
 }
 
 // --- Overview map ------------------------------------------------------------
-export function buildMap(size, half) {
+// A square map image `size` px across covering [ox - half, ox + half] x [oz - half, oz + half].
+export function buildMap(size, half, ox = 0, oz = 0) {
   const img = new Uint8ClampedArray(size * size * 4);
   const col = [0, 0, 0], rock = [0, 0, 0];
   const step = (half * 2) / size;
   for (let j = 0; j < size; j++) for (let i = 0; i < size; i++) {
-    const x = -half + (i + 0.5) * step, z = -half + (j + 0.5) * step;
+    const x = ox - half + (i + 0.5) * step, z = oz - half + (j + 0.5) * step;
     const h = sampleColor(x, z, col, rock);
     const k = (j * size + i) * 4;
     if (h < 0) {

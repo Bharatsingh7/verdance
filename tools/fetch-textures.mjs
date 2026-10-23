@@ -2,17 +2,20 @@
 // colour + OpenGL normal maps, recompressed to 1K JPG, in public/textures/.
 // Usage: node tools/fetch-textures.mjs   (needs curl, unzip and ImageMagick's `magick`)
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const SETS = {
   grass: 'Grass004', dirt: 'Ground037', sand: 'Ground054', rock: 'Rock051', snow: 'Snow006',
   bark: 'Bark014', bark2: 'Bark012', concrete: 'Concrete042A', asphalt: 'Asphalt031', rust: 'Metal041B',
+  // Loaded lazily, the first time a village or lab streams in.
+  wood: 'WoodSiding008', planks: 'Planks037A', roof: 'RoofingTiles013A', thatch: 'ThatchedRoof001A', panel: 'MetalPlates006',
 };
 const out = new URL('../public/textures/', import.meta.url).pathname;
 mkdirSync(out, { recursive: true });
 for (const [name, id] of Object.entries(SETS)) {
+  if (existsSync(join(out, `${name}_albedo.jpg`)) && existsSync(join(out, `${name}_normal.jpg`))) continue;
   const dir = mkdtempSync(join(tmpdir(), 'acg-'));
   const zip = join(dir, 'set.zip');
   execFileSync('curl', ['-sL', '--max-time', '120', '-o', zip, `https://ambientcg.com/get?file=${id}_1K-JPG.zip`]);

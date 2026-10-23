@@ -4,14 +4,14 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { hash2, mulberry32 } from '../core/rng.js';
-import { detailTexture, foliageAtlas, CELL, cellUV } from './textures.js';
+import { detailTexture, foliageAtlas, CELL, cellUV, ROWS } from './textures.js';
 import { barkMaterial, ruinMaterial } from './surfaces.js';
 
 export const shared = { time: { value: 0 }, wind: { value: 1 }, sunView: { value: new THREE.Vector3(0, 1, 0) }, sunColor: { value: new THREE.Color(1, 1, 1) } };
 
 // A texel of the atlas that is always opaque (centre of the broadleaf cell): non-leaf parts sample it so the
 // shared alpha-tested shadow material never cuts holes in trunks or rocks.
-const OPAQUE_UV = [0.125, 1 - 0.5 / 3];
+const OPAQUE_UV = [0.125, 1 - 0.5 / ROWS];
 export const SLOTS = 5;
 
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _s = new THREE.Vector3(), _p = new THREE.Vector3();
@@ -265,7 +265,7 @@ function depthWind(mat, wind) {
 }
 
 const cache = new Map();
-const cached = (key, fn) => { if (!cache.has(key)) cache.set(key, fn()); return cache.get(key); };
+const cached = (key, fn) => { if (!cache.has(key)) { const m = fn(); m.userData.shared = true; cache.set(key, m); } return cache.get(key); };
 
 export const MAT = {
   solid: (wind = 0, detail = 0.8) => cached('solid' + wind + detail, () => patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0 }), { wind, detail, key: 'solid' + wind + detail })),
@@ -364,7 +364,70 @@ const MODELS = {
     void rnd;
     return b;
   },
-  pine: (lod) => {
+  pine: (lod) => conifer(lod, CELL.pine),
+  snowpine: (lod) => conifer(lod, CELL.snowpine),
+  // Redwood: a huge straight trunk, branches only in the upper half, narrow drooping crown.
+  redwood: (lod) => {
+    const b = new Builder();
+    trunk(b, 34, 1.35, 0.25, 0.03, 4, 0xe8b49a, 61);
+    b.add(cyl(1.35, 2.6, 3.2, 10), 0xe8b49a, 0, 1.6, 0, 0, 0, 0, 1, 1, 1, { mat: 3, uvScale: barkUV(2, 3), jitter: 0.35, smooth: true, seed: 61 });
+    const out = newOut();
+    const rnd = mulberry32(63);
+    const whorls = lod ? 8 : 16;
+    for (let k = 0; k < whorls; k++) {
+      const t = k / (whorls - 1), y = 15 + t * 20, R = 4.2 * Math.pow(1 - t, 0.8) + 0.8;
+      const n = lod ? 5 : 8;
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + rnd() * 0.7 + k * 0.9;
+        const dir = new THREE.Vector3(Math.cos(a), -0.15, Math.sin(a)).normalize();
+        const side = new THREE.Vector3(-Math.sin(a), 0.3, Math.cos(a)).normalize();
+        const nrm = new THREE.Vector3(Math.cos(a), 0.8, Math.sin(a)).normalize();
+        const sh = (0.55 + 0.4 * t) * (0.9 + rnd() * 0.2);
+        frond(out, new THREE.Vector3(0, y, 0), dir, side, R * 1.1, R * 0.7 + 0.8, 0.3, CELL.pine, [sh, sh * 1.02, sh * 0.9], lod ? 2 : 3, nrm, 0.3);
+      }
+    }
+    b.addRaw(out.pos, out.nor, out.uv, out.col, 2);
+    return b;
+  },
+  // Acacia: split trunk under a flat umbrella crown.
+  acacia: (lod) => {
+    const b = new Builder();
+    const [tx, ty, tz] = trunk(b, 3.2, 0.3, 0.22, 0.25, 2, BARK, 71);
+    const crown = { x: tx, y: ty + 3, z: tz, rx: 5.5, ry: 1.2, rz: 5.5 };
+    const tips = [];
+    for (let i = 0; i < 4; i++) tips.push(branch(b, tx, ty - 0.3, tz, 3.6, 0.18, i * 1.6 + 0.3, 0.75, BARK));
+    for (const [x, y, z] of tips) canopy(b, { x, y: y + 0.5, z, rx: 2.6, ry: 0.55, rz: 2.6, count: lod ? 10 : 22, size: lod ? [2.2, 3] : [1.5, 2.3], cell: CELL.acacia, seed: 72 + x, nc: crown });
+    canopy(b, { x: tx, y: ty + 3.1, z: tz, rx: 3.4, ry: 0.6, rz: 3.4, count: lod ? 10 : 24, size: [1.6, 2.4], cell: CELL.acacia, seed: 79, nc: crown });
+    return b;
+  },
+  blossom: (lod) => broadleaf(lod, { h: 3.6, r: 0.3, limbs: lod ? 4 : 6, spread: 3.2, cell: CELL.blossom, seed: 81, cluster: 1.9, cards: 26, crownY: 1.8, barkCol: 0xb8a8a0 }),
+  kelp: () => {
+    const b = new Builder();
+    const out = newOut();
+    for (let k = 0; k < 4; k++) {
+      const a = k * 1.7;
+      const dir = new THREE.Vector3(Math.cos(a) * 0.12, 1, Math.sin(a) * 0.12).normalize();
+      frond(out, new THREE.Vector3(Math.cos(a) * 0.3, 0, Math.sin(a) * 0.3), dir, new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)), 6 + k * 1.4, 1.4, -0.02, CELL.kelp, [1, 1, 1], 4, null, 0.2);
+    }
+    b.addRaw(out.pos, out.nor, out.uv, out.col, 2);
+    return b;
+  },
+  seagrass: () => { const b = new Builder(); tuft(b, { count: 3, w: 1.2, h: 1.1, cell: CELL.grass, seed: 25, spread: 0.4, lean: 0.15, color: 0x7aa860 }); return b; },
+  coral: () => {
+    const b = new Builder();
+    const cols = [0xf08a7a, 0xf2b25a, 0xc890e8, 0xf0d8c8, 0x8ad8c8];
+    for (let k = 0; k < 7; k++) {
+      const a = k * 2.3, r = k ? 0.4 + (k % 3) * 0.3 : 0, hgt = 0.5 + (k % 4) * 0.35;
+      b.add(cyl(0.07, 0.16, hgt, 6), cols[k % 5], Math.cos(a) * r, hgt / 2, Math.sin(a) * r, Math.cos(a) * 0.35, 0, Math.sin(a) * 0.35, 1, 1, 1, { jitter: 0.05, seed: k });
+      b.add(ico(0.16, 0), cols[(k + 2) % 5], Math.cos(a) * (r + hgt * 0.3), hgt, Math.sin(a) * (r + hgt * 0.3), 0, 0, 0, 1, 1, 1, { glow: k % 3 === 0 });
+    }
+    b.add(ico(0.55, 1), 0xd89a7a, 0, 0.15, 0, 0, 0, 0, 1.3, 0.6, 1, { jitter: 0.2, seed: 9, smooth: true });
+    return b;
+  },
+};
+
+// Conifer: whorls of crossed, drooping spray cards around a thin trunk, tapering to a leader.
+function conifer(lod, cell) {
     const b = new Builder();
     trunk(b, 13, 0.38, 0.05, 0.04, 3, BARK, 5);
     const out = newOut();
@@ -382,10 +445,10 @@ const MODELS = {
         const nrm = new THREE.Vector3(Math.cos(a), 0.9, Math.sin(a)).normalize();
         const shade = (0.62 + 0.38 * t) * (0.9 + rnd() * 0.2);
         const w = R * 0.65 + 0.6;
-        frond(out, new THREE.Vector3(0, y, 0), dir, side, R * 1.08, w, 0.22, CELL.pine, [shade, shade, shade], 3, nrm, 0.35);
+        frond(out, new THREE.Vector3(0, y, 0), dir, side, R * 1.08, w, 0.22, cell, [shade, shade, shade], 3, nrm, 0.35);
         // crossed card, rolled ~60° around the branch, gives the spray thickness
         const side2 = side.clone().multiplyScalar(0.5).addScaledVector(up, 0.866).normalize();
-        frond(out, new THREE.Vector3(0, y + 0.1, 0), dir, side2, R * 1.0, w * 0.85, 0.22, CELL.pine, [shade * 0.9, shade * 0.9, shade * 0.9], 2, nrm, 0.35);
+        frond(out, new THREE.Vector3(0, y + 0.1, 0), dir, side2, R * 1.0, w * 0.85, 0.22, cell, [shade * 0.9, shade * 0.9, shade * 0.9], 2, nrm, 0.35);
       }
     }
     // inner fill: short sprays packed around the trunk so the cone reads solid
@@ -395,16 +458,18 @@ const MODELS = {
       const dir = new THREE.Vector3(Math.cos(a), -0.2, Math.sin(a)).normalize();
       const nrm = new THREE.Vector3(Math.cos(a), 0.8, Math.sin(a)).normalize();
       const sh = 0.5 + 0.25 * t;
-      frond(out, new THREE.Vector3(0, y, 0), dir, new THREE.Vector3(-Math.sin(a), 0.5, Math.cos(a)).normalize(), R + 0.6, R * 0.9 + 0.6, 0.15, CELL.pine, [sh, sh, sh], 1, nrm);
+      frond(out, new THREE.Vector3(0, y, 0), dir, new THREE.Vector3(-Math.sin(a), 0.5, Math.cos(a)).normalize(), R + 0.6, R * 0.9 + 0.6, 0.15, cell, [sh, sh, sh], 1, nrm);
     }
     // leader at the top
     for (const a of [0, Math.PI / 2]) {
       const side = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
-      frond(out, new THREE.Vector3(0, 12.6, 0), new THREE.Vector3(0, 1, 0), side, 1.6, 0.9, 0, CELL.pine, [1, 1, 1], 1, new THREE.Vector3(0, 1, 0), 0.6);
+      frond(out, new THREE.Vector3(0, 12.6, 0), new THREE.Vector3(0, 1, 0), side, 1.6, 0.9, 0, cell, [1, 1, 1], 1, new THREE.Vector3(0, 1, 0), 0.6);
     }
     b.addRaw(out.pos, out.nor, out.uv, out.col, 2);
     return b;
-  },
+}
+
+const MODELS2 = {
   jungle: (lod) => {
     const b = new Builder();
     const [tx, ty, tz] = trunk(b, 16, 0.75, 0.4, 0.1, 4, JBARK, 7, 4);
@@ -511,12 +576,21 @@ const MODELS = {
   },
 };
 
+Object.assign(MODELS, MODELS2);
+
 // Per-type rendering: wind amount, shadow casting, colour variation, ground tint, whether a far LOD exists.
 export const VEG_RENDER = {
   oak: { wind: 0.0025, shadow: 1, vary: 0.12, lod: 1 },
   maple: { wind: 0.0025, shadow: 1, vary: 0.12, lod: 1 },
   birch: { wind: 0.004, shadow: 1, vary: 0.1, lod: 1 },
   pine: { wind: 0.0013, shadow: 1, vary: 0.08, lod: 1 },
+  snowpine: { wind: 0.0013, shadow: 1, vary: 0.06, lod: 1 },
+  redwood: { wind: 0.0003, shadow: 1, vary: 0.08, lod: 1 },
+  acacia: { wind: 0.003, shadow: 1, vary: 0.12, lod: 1 },
+  blossom: { wind: 0.003, shadow: 1, vary: 0.1, lod: 1 },
+  kelp: { wind: 0.018, vary: 0.2 },
+  seagrass: { wind: 0.2, near: 1, vary: 0.15 },
+  coral: { vary: 0.25 },
   jungle: { wind: 0.0008, shadow: 1, vary: 0.1, lod: 1 },
   palm: { wind: 0.004, shadow: 1, vary: 0.1, lod: 1 },
   bush: { wind: 0.03, vary: 0.15, lod: 1 },
