@@ -114,7 +114,7 @@ export class Truck {
       const blades = new THREE.Group();
       for (let i = 0; i < 3; i++) { const bl = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.7, 0.04), this.litMat); bl.position.y = 0.32; const h = new THREE.Group(); h.rotation.z = (i / 3) * Math.PI * 2; h.add(bl); blades.add(h); }
       blades.position.set(0, 0, -0.42);
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.75, 0.06, 6, 24), this.glowMat);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.6, 0.04, 6, 24), new THREE.MeshBasicMaterial({ color: 0x6ff5dc }));
       ring.position.set(0, 0, -0.42);
       const g = new THREE.Group();
       g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 0.5, 10).rotateX(Math.PI / 2), this.litMat), blades, ring);

@@ -90,6 +90,12 @@ export class CameraRig {
         const d = Math.hypot(dx, dz);
         if (d < r && d > 1e-4) { this.pos.x += (dx / d) * (r - d); this.pos.z += (dz / d) * (r - d); }
       }
+      // ...and out of round solid things (crystals, great trunks, towers) at camera height.
+      for (const sh of c.shapes) {
+        if (!sh.r || this.pos.y < sh.y0 || this.pos.y > sh.top) continue;
+        const dx = this.pos.x - sh.x, dz = this.pos.z - sh.z, r = sh.r + 1.2, d = Math.hypot(dx, dz);
+        if (d < r && d > 1e-4) { this.pos.x += (dx / d) * (r - d); this.pos.z += (dz / d) * (r - d); }
+      }
     }
     this.look.lerp(this._v.set(v.pos.x, v.pos.y + 2.0, v.pos.z), 1 - Math.exp(-12 * dt));
 
