@@ -201,6 +201,8 @@ export class Atmosphere {
       this.scene.environmentIntensity *= 0.5;
     }
     this.sky.visible = this.stars.visible = !uw;
+    // (with the sky hidden, anything past the water planes would show the black clear colour)
+    this.scene.background = uw ? this.scene.fog.color : null;
     for (const c of this.clouds) c.g.visible = !uw;
 
     // Clouds drift and wrap around the camera; tinted by the hour.
